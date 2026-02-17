@@ -1,0 +1,20 @@
+{
+  "name": "playwright-automation",
+  "version": "1.0.0",
+  "description": "Rishon LeZion Automation",
+  "main": "index.js",
+"scripts": {
+  "test:dev": "cross-env TEST_ENV=TEST node tests/booking_test.js",
+  "test:prod": "cross-env TEST_ENV=PROD node tests/booking_test.js",
+  "test:all": "npm run test:dev & npm run test:prod"
+},
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "playwright": "^1.40.0",
+    "winston": "^3.19.0",
+    "winston-loki": "^6.1.4"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.0"
+  }
+}
