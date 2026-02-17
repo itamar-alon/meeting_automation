@@ -6,11 +6,13 @@ const path = require('path');
 // --- הגדרות נתיבים מעודכנות (Absolute Paths) ---
 const LOKI_URL = 'http://10.77.72.45:3100/loki/api/v1/push';
 const JOB_NAME = 'meeting_automation';
-const LOG_DIR = path.resolve(__dirname, 'logs');
+
+// התיקון כאן: '..' מוציא אותנו מתיקיית tests לתיקייה הראשית
+const LOG_DIR = path.resolve(__dirname, '..', 'logs');
 const SCREEN_DIR = path.resolve(LOG_DIR, 'screenshots');
 
 // יצירת תיקיות אם אינן קיימות
-if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
+if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 if (!fs.existsSync(SCREEN_DIR)) fs.mkdirSync(SCREEN_DIR, { recursive: true });
 
 // --- פונקציית שליחה ל-Loki עם Retry ---
@@ -63,9 +65,8 @@ async function takeScreenshot(page, step) {
         const filePath = path.join(SCREEN_DIR, fileName);
         
         await page.screenshot({ path: filePath, fullPage: true });
-        // הוספת Screenshot_Saved ללוג כדי שגרפנה תוכל לחלץ את השם בעתיד
         await info(`🖼️ Screenshot_Saved: ${fileName}`);
-        console.log(`✅ Screenshot physical path: ${filePath}`);
+        console.log(`✅ Screenshot saved to main root logs: ${filePath}`);
     } catch (e) {
         await warn(`⚠️ Screenshot failed: ${e.message}`);
     }
@@ -125,7 +126,6 @@ async function takeScreenshot(page, step) {
         await bookingPage.selectOption(SERVICE_NAME);
         await bookingPage.selectOption('טלפוני');
         
-        // כאן השתמשנו בפונקציה המעודכנת שסורקת תאריכים עד למציאת שעה
         await info('📅 Scanning for available appointments...');
         await bookingPage.findAndPickAvailableAppointment();
 
@@ -159,7 +159,6 @@ async function takeScreenshot(page, step) {
 
     } catch (err) {
         await error(`💥 CRITICAL FAILURE: ${err.message}`);
-        // צילום מסך לפני סגירת הדפדפן
         await takeScreenshot(page, `CRITICAL_FAILURE_${ENV}`);
         process.exitCode = 1;
     } finally {
@@ -167,7 +166,6 @@ async function takeScreenshot(page, step) {
         await browser.close();
         await info('👋 Process finished.');
         
-        // המתנה קלה לוודא שכל בקשות ה-Loki (fetch) הסתיימו
         await new Promise(r => setTimeout(r, 2000));
         process.exit(process.exitCode || 0);
     }
