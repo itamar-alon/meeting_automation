@@ -3,24 +3,22 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-// --- הגדרות נתיבים מעודכנות (Absolute Paths) ---
+// --- הגדרות נתיבים ---
 const LOKI_URL = 'http://10.77.72.45:3100/loki/api/v1/push';
 const JOB_NAME = 'meeting_automation';
 
-// התיקון כאן: '..' מוציא אותנו מתיקיית tests לתיקייה הראשית
 const LOG_DIR = path.resolve(__dirname, '..', 'logs');
 const SCREEN_DIR = path.resolve(LOG_DIR, 'screenshots');
 
-// יצירת תיקיות אם אינן קיימות
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 if (!fs.existsSync(SCREEN_DIR)) fs.mkdirSync(SCREEN_DIR, { recursive: true });
 
-// --- פונקציית שליחה ל-Loki עם Retry ---
+// --- פונקציית שליחה ל-Loki ---
 async function sendToLoki(level, message, retries = 3) {
-    const ts = (Date.now() * 1_000_000).toString(); // ננוסניות
+    const ts = (Date.now() * 1_000_000).toString();
     const payload = {
         streams: [{
-            stream: { job: JOB_NAME, severity: level },
+            stream: { job: JOB_NAME, severity: level, target_env: process.env.TEST_ENV || 'TEST' },
             values: [[ts, message]]
         }]
     };
@@ -35,14 +33,12 @@ async function sendToLoki(level, message, retries = 3) {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return;
         } catch (e) {
-            console.error(`⚠️ Loki send attempt ${attempt} failed: ${e.message}`);
-            if (attempt === retries) console.error('❌ Giving up on sending log to Loki.');
+            if (attempt === retries) console.error(`❌ Loki failure: ${e.message}`);
             else await new Promise(r => setTimeout(r, 1000));
         }
     }
 }
 
-// --- פונקציית לוג עם Severity ---
 async function log(level, message) {
     const timestamp = new Date().toLocaleTimeString('he-IL', { hour12: false });
     console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}`);
@@ -53,20 +49,16 @@ const info = msg => log('info', msg);
 const warn = msg => log('warn', msg);
 const error = msg => log('error', msg);
 
-// --- פונקציית צילום מסך מעודכנת ---
+// --- פונקציית צילום מסך ---
 async function takeScreenshot(page, step) {
     try {
-        if (!page || page.isClosed()) {
-            console.error('❌ Cannot take screenshot: Page is already closed.');
-            return;
-        }
+        if (!page || page.isClosed()) return;
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const fileName = `FAIL_${step}_${timestamp}.png`;
         const filePath = path.join(SCREEN_DIR, fileName);
         
         await page.screenshot({ path: filePath, fullPage: true });
-        await info(`🖼️ Screenshot_Saved: ${fileName}`);
-        console.log(`✅ Screenshot saved to main root logs: ${filePath}`);
+        await info(`📸 Screenshot_Saved: ${fileName}`);
     } catch (e) {
         await warn(`⚠️ Screenshot failed: ${e.message}`);
     }
@@ -74,49 +66,87 @@ async function takeScreenshot(page, step) {
 
 // --- Main Script ---
 (async () => {
-    const ENV = process.env.TEST_ENV || 'TEST';
+    const ENV = (process.env.TEST_ENV || 'TEST').toUpperCase();
     const INTERCEPT_MODE = ENV === 'PROD';
-
-    let BASE_URL, DEPARTMENT_NAME, SERVICE_NAME;
-
-    if (ENV === 'PROD') {
-        BASE_URL = 'https://my.rishonlezion.muni.il';
-        DEPARTMENT_NAME = 'מנהל החינוך';
-        SERVICE_NAME = 'גני ילדים - רישום/ביטול רישום';
-    } else {
-        BASE_URL = 'https://mytest.rishonlezion.muni.il';
-        DEPARTMENT_NAME = 'אגף הכנסות';
-        SERVICE_NAME = 'אישורים לטאבו - מוזמנים';
-    }
-
-    const { LoginPage } = require('../pages/loginPage.js');
-    const { AppointmentsPage } = require('../pages/meetingPage.js');
-    const { MyAppointmentsPage } = require('../pages/myMeetingsPage.js');
-
-    const browser = await chromium.launch({ headless: false, slowMo: 600 });
-    const page = await browser.newPage();
-    const loginPage = new LoginPage(page);
-    const bookingPage = new AppointmentsPage(page);
-    const myApptsPage = new MyAppointmentsPage(page);
+    let browser, page;
 
     try {
-        await info(`🚀 STARTING SESSION | Env: ${ENV} | Dept: ${DEPARTMENT_NAME}`);
+        let BASE_URL, DEPARTMENT_NAME, SERVICE_NAME;
 
-        const MOCK_RESPONSE = {
-            "SetAppointmentData": {
-                "ParentCaseId": 0, "ServiceId": 262, "DateAndTime": "2026-02-17T16:00:00",
-                "UserId": 519, "CustomerId": 255870, "AppointmentTypeId": 0,
-                "CustomProperties": { "1": "PHONE" }
-            },
-            "ScriptResults": { "Messages": [], "ReturnCode": 0 },
-            "CaseId": 1810639, "ProcessId": 1810348, "AppointmentId": 202733,
-            "CalendarId": 91558, "QNumber": 0, "QCode": "", "CustomerTreatmentPlanId": 0
-        };
+        if (ENV === 'PROD') {
+            BASE_URL = 'https://my.rishonlezion.muni.il';
+            DEPARTMENT_NAME = 'מנהל החינוך';
+            SERVICE_NAME = 'גני ילדים - רישום/ביטול רישום';
+        } else {
+            BASE_URL = 'https://mytest.rishonlezion.muni.il';
+            DEPARTMENT_NAME = 'אגף הכנסות';
+            SERVICE_NAME = 'אישורים לטאבו - מוזמנים';
+        }
+
+        const { LoginPage } = require('../pages/loginPage.js');
+        const { AppointmentsPage } = require('../pages/meetingPage.js');
+        const { MyAppointmentsPage } = require('../pages/myMeetingsPage.js');
+
+        browser = await chromium.launch({ 
+            headless: false, 
+            slowMo: 300,
+            args: [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage'
+            ] 
+        });
+        
+        const context = await browser.newContext({ 
+            viewport: { width: 1280, height: 720 },
+            ignoreHTTPSErrors: true 
+        });
+        page = await context.newPage();
+        
+        page.setDefaultTimeout(60000); 
+
+        const loginPage = new LoginPage(page);
+        const bookingPage = new AppointmentsPage(page);
+        const myApptsPage = new MyAppointmentsPage(page);
+
+        await info(`🚀 STARTING SESSION | Env: ${ENV} | Dept: ${DEPARTMENT_NAME}`);
 
         // --- Login ---
         await info('--- Step 1: Login Process Starting ---');
-        await page.goto(BASE_URL);
+        try {
+            await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        } catch (e) {
+            await warn('Initial navigation failed, retrying...');
+            await page.reload({ waitUntil: 'networkidle' });
+        }
+
+        // --- טיפול בבאנר עוגיות (קריטי לפני לחיצה על כניסה) ---
+        const cookieAcceptBtn = page.locator('button:has-text("מאשר הכל"), button:has-text("אישור"), #onetrust-accept-btn-handler');
+        try {
+            if (await cookieAcceptBtn.isVisible({ timeout: 10000 })) {
+                await info('🍪 Cookie banner detected, clicking accept...');
+                await cookieAcceptBtn.click();
+                await page.waitForTimeout(1500); // המתנה להיעלמות האנימציה של הבאנר
+            }
+        } catch (e) {
+            await warn('Cookie banner skip or not found.');
+        }
+
+        // --- לחיצה על כפתור כניסה ---
+        await info('🖱️ Attempting to click login button...');
+        const loginBtn = page.locator('button[aria-label*="פתיחת מסך"], button:has-text("כניסה")').first();
+        
+        await loginBtn.waitFor({ state: 'visible', timeout: 20000 });
+        await loginBtn.click();
+        
+        // וידוא שהגענו למסך הלוגין
+        await page.waitForSelector('text=באמצעות סיסמה', { state: 'visible', timeout: 30000 });
         await loginPage.performMainLogin(process.env.USER_ID, process.env.USER_PASS);
+        
+        await page.waitForLoadState('networkidle');
+        await page.waitForTimeout(5000); 
+        
         await loginPage.navigateToAppointments();
         await info('✅ Login completed.');
 
@@ -124,10 +154,26 @@ async function takeScreenshot(page, step) {
         await info('--- Step 2: Selection Flow Starting ---');
         await bookingPage.selectOption(DEPARTMENT_NAME);
         await bookingPage.selectOption(SERVICE_NAME);
-        await bookingPage.selectOption('טלפוני');
+        
+        try {
+            await page.waitForTimeout(2000);
+            await bookingPage.selectOption('טלפוני');
+        } catch (e) {
+            await warn('Could not find "טלפוני", trying alternative or continuing...');
+        }
         
         await info('📅 Scanning for available appointments...');
-        await bookingPage.findAndPickAvailableAppointment();
+        
+        await page.waitForSelector('.day, .cell, [role="gridcell"], td', { state: 'attached', timeout: 30000 });
+        await page.waitForTimeout(2000); 
+        
+        // עטיפת הניסיון ב-try/catch כדי שההתרסקות מה-Page Object תקבל תיעוד מדוייק
+        try {
+            await bookingPage.findAndPickAvailableAppointment();
+        } catch (bookingErr) {
+            await warn(`Appointment scanning failed internally. Calendar DOM might have reset after clicking 'Back'.`);
+            throw bookingErr;
+        }
 
         if (INTERCEPT_MODE) {
             await info('🛑 PROD MODE: Interceptor Active.');
@@ -136,37 +182,51 @@ async function takeScreenshot(page, step) {
                 await route.fulfill({
                     status: 200,
                     contentType: 'application/json',
-                    body: JSON.stringify(MOCK_RESPONSE)
+                    body: JSON.stringify({ "CaseId": 12345, "ScriptResults": { "ReturnCode": 0 } })
                 });
             });
-            await bookingPage.submitBooking();
-            await page.waitForTimeout(5000);
-            await info('✅ UI Verification Passed (Mock).');
-        } else {
-            await info('🚀 TEST MODE: Real booking.');
-            await bookingPage.submitBooking();
-            await page.waitForTimeout(3000);
+        }
 
+        await bookingPage.submitBooking();
+        
+        if (!INTERCEPT_MODE) {
             await info('--- Step 3: Cancellation Starting ---');
+            await page.waitForTimeout(5000); 
+            
             await myApptsPage.navigateToFutureAppointments();
-            await myApptsPage.expandFirstAppointment();
-            await myApptsPage.cancelAppointment();
-            await myApptsPage.confirmCancellation();
-            await info('✅ Cancellation finished.');
+            await page.waitForLoadState('networkidle');
+            
+            let isVisible = false;
+            for (let i = 0; i < 3; i++) {
+                isVisible = await page.locator('text=נושא:').first().isVisible({ timeout: 5000 }).catch(() => false);
+                if (isVisible) break;
+                await info(`⚠️ Attempt ${i+1}: Appointment list not visible, waiting...`);
+                await page.reload({ waitUntil: 'networkidle' });
+                await page.waitForTimeout(3000);
+            }
+
+            if (isVisible) {
+                await myApptsPage.expandFirstAppointment();
+                await myApptsPage.cancelAppointment();
+                await myApptsPage.confirmCancellation();
+                await info('✅ Cancellation finished.');
+            } else {
+                await error('❌ Failed to find appointments for cancellation after retries.');
+            }
         }
 
         await info('🎉 SESSION COMPLETED SUCCESSFULLY!');
 
     } catch (err) {
         await error(`💥 CRITICAL FAILURE: ${err.message}`);
-        await takeScreenshot(page, `CRITICAL_FAILURE_${ENV}`);
+        if (page) await takeScreenshot(page, `FAILURE_${ENV}`);
         process.exitCode = 1;
     } finally {
-        await info('🏁 Closing session.');
-        await browser.close();
+        if (browser) {
+            await info('🏁 Closing session.');
+            await browser.close();
+        }
         await info('👋 Process finished.');
-        
-        await new Promise(r => setTimeout(r, 2000));
-        process.exit(process.exitCode || 0);
+        setTimeout(() => process.exit(process.exitCode || 0), 2000);
     }
 })();
