@@ -82,7 +82,12 @@ async function takeScreenshot(page, step) {
         const DEPT = ENV === 'PROD' ? 'מנהל החינוך' : 'אגף הכנסות';
         const SERVICE = ENV === 'PROD' ? 'גני ילדים - רישום/ביטול רישום' : 'אישורים לטאבו - מוזמנים';
 
-        browser = await chromium.launch({ headless: false, slowMo: 100 });
+        // הוספת דגלים (args) למניעת קריסות הדפדפן בעומס
+        browser = await chromium.launch({ 
+            headless: false, 
+            slowMo: 100,
+            args: ['--no-sandbox', '--disable-dev-shm-usage']
+        });
         const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, ignoreHTTPSErrors: true });
         page = await context.newPage();
         page.setDefaultTimeout(60000); 
@@ -98,10 +103,17 @@ async function takeScreenshot(page, step) {
         const cookieBtn = page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
         if (await cookieBtn.isVisible({ timeout: 5000 })) await cookieBtn.click({ force: true });
 
-        await page.locator('button:has-text("כניסה")').first().click();
+        // המתנה מפורשת לכפתור הכניסה לפני הלחיצה כדי למנוע Flakiness
+        const loginBtn = page.locator('button:has-text("כניסה")').first();
+        await loginBtn.waitFor({ state: 'visible', timeout: 30000 });
+        await loginBtn.click();
+        
         await loginPage.performMainLogin(process.env.USER_ID, process.env.USER_PASS);
         await page.waitForLoadState('networkidle');
         await loginPage.navigateToAppointments();
+
+        // המתנה לסיום טעינת הנתונים לאחר המעבר לעמוד הפגישות
+        await page.waitForLoadState('networkidle');
 
         // --- שלב 2: זימון ---
         await bookingPage.selectOption(DEPT);

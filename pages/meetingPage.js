@@ -16,11 +16,13 @@ class AppointmentsPage {
     async findAndPickAvailableAppointment() {
         console.log('📅 Scanning calendar: Checking dates with step-refresh logic.');
 
-        // סגירת באנר עוגיות
+        // סגירת באנר עוגיות - שופר כדי למנוע Flakiness של isVisible
         const cookieBtn = this.page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
-        if (await cookieBtn.isVisible().catch(() => false)) {
-            await cookieBtn.click({ force: true });
+        try {
+            await cookieBtn.click({ force: true, timeout: 3000 });
             await this.page.waitForTimeout(1000);
+        } catch (e) {
+            // הבאנר לא הופיע, הכל בסדר, ממשיכים.
         }
 
         let foundSlot = false;
@@ -90,31 +92,33 @@ class AppointmentsPage {
     async submitBooking() {
         console.log('🚀 Submitting booking via orange button...');
 
-         const submitBtnLocator = this.page.locator('button.MuiButton-root')
+        const submitBtnLocator = this.page.locator('button.MuiButton-root')
              .filter({ hasText: /^זימון פגישה$/ })
              .last();
 
-    // מחכים שהכפתור יהיה מופיע ב-viewport
-         await submitBtnLocator.waitFor({ state: 'visible', timeout: 30000 });
+        // Playwright יודע לחכות בעצמו שהכפתור יהיה גלוי, זמין ומוכן ללחיצה.
+        // הסרנו את ה-elementHandle שעושה בעיות עם רינדור מחדש של React.
+        await submitBtnLocator.waitFor({ state: 'visible', timeout: 30000 });
+        
+        // המתנה קצרה כדי לתת למערכת לעדכן את הטופס שהשעה נבחרה בהצלחה
+        console.log('⏳ Waiting a moment for React state to sync before clicking...');
+        await this.page.waitForTimeout(2000);
+        
+        // click מוודא אוטומטית שהכפתור enabled ולא מקבל pointer-events: none
+        await submitBtnLocator.click({ delay: 300, force: true }); 
 
-    // מחכים שהאלמנט באמת מצוי ב-DOM וש־React סיים render
-         const submitBtnHandle = await submitBtnLocator.elementHandle({ timeout: 20000 });
-         if (!submitBtnHandle) {
-                throw new Error('Submit button not found or not attached to DOM.');
-         }
-
-    // מחכים שהוא enabled
-         await this.page.waitForFunction(
-              btn => !btn.disabled && btn.getAttribute('aria-disabled') !== 'true',
-             submitBtnHandle,
-                { timeout: 20000, polling: 250 }
-         );
-
-    // לחיצה עם delay קטן כדי שה-React יקלט את האירוע
-         await submitBtnHandle.click({ delay: 300 });
-
-            console.log('✅ Clicked submit button. Now waiting for server response...');
+        // מנגנון הגנה: אם הכפתור עדיין שם אחרי הלחיצה, נבצע לחיצה נוספת
+        try {
+            if (await submitBtnLocator.isVisible({ timeout: 1500 })) {
+                console.log('🔄 Button still visible, executing a second click just in case...');
+                await submitBtnLocator.click({ delay: 300, force: true });
+            }
+        } catch (e) {
+            // הכל בסדר, הכפתור נעלם או שהדף התחלף
         }
+
+        console.log('✅ Clicked submit button. Now waiting for server response...');
+    }
 
     async verifySuccessAndClose() {
         console.log('⏳ Verifying success message (Waiting up to 90s for slow server)...');

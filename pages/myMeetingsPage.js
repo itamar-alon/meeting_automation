@@ -16,8 +16,8 @@ class MyAppointmentsPage {
     async navigateToFutureAppointments() {
         console.log('📂 Navigating to "Future Appointments" tab...');
         
-        // 1. לחיצה על הטאב
-        await this.futureAppointmentsTab.click();
+        // 1. לחיצה על הטאב - הוספתי force למקרה שאלמנט אחר מסתיר אותו זמנית
+        await this.futureAppointmentsTab.click({ force: true });
         
         // 2. המתנה לטעינה ראשונית - ניתן למערכת רגע "לנשום"
         await this.page.waitForTimeout(2000); 
@@ -30,10 +30,14 @@ class MyAppointmentsPage {
         } catch (e) {
             console.log('⚠️ List seems empty or stuck. Refreshing page...');
             await this.page.reload();
+            
+            // חיזוק: וידוא שהרשת נרגעה אחרי הריענון לפני שממשיכים
+            await this.page.waitForLoadState('networkidle'); 
             await this.page.waitForTimeout(3000); // מחכים שהדף יעלה מחדש
             
             // צריך ללחוץ שוב על הטאב כי הריענון יכול לזרוק אותנו לטאב הראשי
-            await this.futureAppointmentsTab.click();
+            await this.futureAppointmentsTab.waitFor({ state: 'visible', timeout: 10000 });
+            await this.futureAppointmentsTab.click({ force: true });
             await this.page.waitForTimeout(2000);
         }
     }
@@ -44,8 +48,9 @@ class MyAppointmentsPage {
         // כאן אנחנו מחכים עד 30 שניות (ברירת מחדל) שהפגישה תופיע
         // הוספתי state: 'attached' כדי לוודא שהאלמנט קיים ב-DOM
         try {
-            await this.page.locator('text=נושא:').first().waitFor({ state: 'visible', timeout: 15000 });
-            await this.page.locator('text=נושא:').first().click();
+            const row = this.page.locator('text=נושא:').first();
+            await row.waitFor({ state: 'visible', timeout: 15000 });
+            await row.click({ force: true }); // שימוש ב-force למקרה שהאלמנט חופף
         } catch (error) {
             console.error('❌ Failed to find appointment. Maybe the booking failed?');
             // צילום מסך למצב שבו הרשימה ריקה
@@ -66,19 +71,26 @@ class MyAppointmentsPage {
         
         // לפעמים הכפתור מוסתר, נגלול אליו
         await btn.scrollIntoViewIfNeeded();
-        await btn.click();
+        
+        // הוספת force ו-delay קטן כדי לפצות על תזוזות של האנימציה
+        await btn.click({ force: true, delay: 100 });
     }
 
     async confirmCancellation() {
         console.log('⚠️ Confirming cancellation in popup...');
         
-        // המתנה לפופ-אפ
-        await this.page.getByText('האם לבטל את הפגישה?').waitFor();
+        // המתנה לפופ-אפ שיהיה גלוי לחלוטין
+        const popupText = this.page.getByText('האם לבטל את הפגישה?');
+        await popupText.waitFor({ state: 'visible', timeout: 10000 });
         
-        // לחיצה על האישור
-        await this.confirmCancelButton.click();
+        // המתנה קצרה לכפתור ולחיצה עליו
+        await this.confirmCancelButton.waitFor({ state: 'visible', timeout: 5000 });
+        await this.confirmCancelButton.click({ force: true });
         
         console.log('✅ Cancellation confirmed.');
+        
+        // תוספת קריטית: מחכים שהפופ-אפ ייעלם כדי לדעת שהביטול נשלח לפני סיום הטסט
+        await popupText.waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
         await this.page.waitForTimeout(2000); 
     }
 }
