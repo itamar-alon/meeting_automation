@@ -3,6 +3,7 @@ const { chromium } = require('playwright');
 const { performance } = require('perf_hooks');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process'); // נדרש לניקוי תהליכים
 
 // --- הגדרות נתיבים ---
 const LOKI_URL = 'http://10.77.72.45:3100/loki/api/v1/push';
@@ -13,7 +14,22 @@ const SCREEN_DIR = path.resolve(LOG_DIR, 'screenshots');
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 if (!fs.existsSync(SCREEN_DIR)) fs.mkdirSync(SCREEN_DIR, { recursive: true });
 
-// --- פונקציות לוג משודרגות (לא נמחק!) ---
+// --- פונקציית ניקוי תהליכים (חדש!) ---
+function killOldProcesses() {
+    if (process.platform === 'win32') {
+        try {
+            console.log('🧹 Cleaning up old browser processes...');
+            // מנקה תהליכי כרום ודרייברים תקועים
+            execSync('taskkill /f /im chrome.exe /t 2>nul || exit 0');
+            execSync('taskkill /f /im chromedriver.exe /t 2>nul || exit 0');
+            console.log('✅ Cleanup complete.');
+        } catch (e) {
+            // התעלמות משגיאות אם אין תהליכים פתוחים
+        }
+    }
+}
+
+// --- פונקציות לוג משודרגות ---
 async function sendToLoki(level, message, durationMs = null, retries = 3) {
     const ts = (Date.now() * 1_000_000).toString();
     let logMessage = message;
@@ -73,6 +89,9 @@ async function takeScreenshot(page, step) {
     const INTERCEPT_MODE = ENV === 'PROD';
     let browser, page;
 
+    // הרצת ניקוי לפני תחילת הסשן
+    killOldProcesses();
+
     try {
         const { LoginPage } = require('../pages/loginPage.js');
         const { AppointmentsPage } = require('../pages/meetingPage.js');
@@ -82,12 +101,22 @@ async function takeScreenshot(page, step) {
         const DEPT = ENV === 'PROD' ? 'מנהל החינוך' : 'אגף הכנסות';
         const SERVICE = ENV === 'PROD' ? 'גני ילדים - רישום/ביטול רישום' : 'אישורים לטאבו - מוזמנים';
 
-        // הוספת דגלים (args) למניעת קריסות הדפדפן בעומס
+        info(`🚀 STARTING SESSION | Env: ${ENV}`);
+
         browser = await chromium.launch({ 
             headless: false, 
             slowMo: 100,
-            args: ['--no-sandbox', '--disable-dev-shm-usage']
+            // הוספת דגלים לשיפור יציבות ומניעת זליגת זיכרון
+            args: [
+                '--no-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process' // עוזר במכונות עם מעט זיכרון
+            ]
         });
+
         const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, ignoreHTTPSErrors: true });
         page = await context.newPage();
         page.setDefaultTimeout(60000); 
@@ -96,14 +125,11 @@ async function takeScreenshot(page, step) {
         const bookingPage = new AppointmentsPage(page);
         const myApptsPage = new MyAppointmentsPage(page);
 
-        info(`🚀 STARTING SESSION | Env: ${ENV}`);
-
         // --- שלב 1: כניסה ---
         await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
         const cookieBtn = page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
         if (await cookieBtn.isVisible({ timeout: 5000 })) await cookieBtn.click({ force: true });
 
-        // המתנה מפורשת לכפתור הכניסה לפני הלחיצה כדי למנוע Flakiness
         const loginBtn = page.locator('button:has-text("כניסה")').first();
         await loginBtn.waitFor({ state: 'visible', timeout: 30000 });
         await loginBtn.click();
@@ -112,7 +138,6 @@ async function takeScreenshot(page, step) {
         await page.waitForLoadState('networkidle');
         await loginPage.navigateToAppointments();
 
-        // המתנה לסיום טעינת הנתונים לאחר המעבר לעמוד הפגישות
         await page.waitForLoadState('networkidle');
 
         // --- שלב 2: זימון ---
@@ -120,7 +145,6 @@ async function takeScreenshot(page, step) {
         await bookingPage.selectOption(SERVICE);
         try { await bookingPage.selectOption('טלפוני'); } catch (e) {}
         
-        // כאן נכנסת הפונקציה החדשה שבודקת את השעות לעומק
         try {
             await bookingPage.findAndPickAvailableAppointment();
         } catch (noSlotsErr) {
@@ -144,7 +168,6 @@ async function takeScreenshot(page, step) {
         await bookingPage.submitBooking();
 
         if (!INTERCEPT_MODE) {
-            // המתנה חכמה לאסמכתא
             await bookingPage.verifySuccessAndClose();
             const bookingDuration = Math.round(performance.now() - bookingStartTime);
             info('✅ Booking confirmed successfully', bookingDuration);
@@ -153,7 +176,6 @@ async function takeScreenshot(page, step) {
             info('--- Step 3: Cancellation Starting ---');
             const futureApptsTab = page.locator('button[role="tab"][aria-label*="פגישות עתידיות"]');
             
-            // אם הועפנו החוצה, חוזרים פנימה (הלוגיקה שביקשת לשמור!)
             if (!(await futureApptsTab.isVisible({ timeout: 5000 }))) {
                 await loginPage.navigateToAppointments();
             }
@@ -180,6 +202,7 @@ async function takeScreenshot(page, step) {
         process.exitCode = 1;
     } finally {
         if (browser) await browser.close();
+        // השהייה קצרה לוודא שכל הלוגים נשלחו ל-Loki לפני היציאה
         setTimeout(() => process.exit(process.exitCode || 0), 2000);
     }
 })();
