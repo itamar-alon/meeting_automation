@@ -5,7 +5,17 @@ class AppointmentsPage {
 
     async selectOption(optionText) {
         const option = this.page.getByText(optionText).last(); 
-        await option.waitFor({ state: 'visible', timeout: 15000 });
+        const noResults = this.page.getByText('אין תוצאות חיפוש מתאימות').last();
+
+        // Playwright ימתין עד שאו שהאופציה תופיע, או שהודעת "אין תוצאות" תופיע
+        await option.or(noResults).waitFor({ state: 'visible', timeout: 15000 });
+
+        // אם ההודעה של אין תוצאות מופיעה על המסך, נזרוק מיד שגיאה חכמה שתסווג כתקלת סביבה
+        if (await noResults.isVisible()) {
+            throw new Error(`ENVIRONMENT_ERROR: אין נתונים עבור הערך "${optionText}"`);
+        }
+
+        // אחרת, האופציה נמצאה ונלחץ עליה כרגיל
         await option.click();
         await this.page.waitForTimeout(1000); 
     }

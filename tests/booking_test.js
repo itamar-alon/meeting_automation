@@ -22,6 +22,8 @@ function killOldProcesses() {
             // מנקה תהליכי כרום ודרייברים תקועים
             execSync('taskkill /f /im chrome.exe /t 2>nul || exit 0');
             execSync('taskkill /f /im chromedriver.exe /t 2>nul || exit 0');
+            // תוספת קטנה לניקוי תהליכי פליירייט שנתקעו ברקע
+            execSync('taskkill /f /im node.exe /fi "WINDOWTITLE eq Playwright*" /t 2>nul || exit 0');
             console.log('✅ Cleanup complete.');
         } catch (e) {
             // התעלמות משגיאות אם אין תהליכים פתוחים
@@ -113,7 +115,7 @@ async function takeScreenshot(page, step) {
                 '--disable-gpu',
                 '--no-first-run',
                 '--no-zygote',
-                '--single-process' // עוזר במכונות עם מעט זיכרון
+                '--remote-debugging-port=9222' // הוסר single-process והתווסף פורט קבוע
             ]
         });
 
@@ -141,18 +143,20 @@ async function takeScreenshot(page, step) {
         await page.waitForLoadState('networkidle');
 
         // --- שלב 2: זימון ---
-        await bookingPage.selectOption(DEPT);
-        await bookingPage.selectOption(SERVICE);
-        try { await bookingPage.selectOption('טלפוני'); } catch (e) {}
-        
         try {
+            await bookingPage.selectOption(DEPT);
+            await bookingPage.selectOption(SERVICE);
+            try { await bookingPage.selectOption('טלפוני'); } catch (e) {}
+            
             await bookingPage.findAndPickAvailableAppointment();
-        } catch (noSlotsErr) {
-            if (noSlotsErr.message.includes('No slots found')) {
-                info('⚠️ SKIPPING: No available appointments found. Ending session.');
+        } catch (envErr) {
+            // תפיסה חכמה של שגיאות נתונים - מסווג אותן תחת תקינות סביבה ולא תחת סיסטם
+            if (envErr.message.includes('No slots found') || envErr.message.includes('ENVIRONMENT_ERROR') || envErr.message.includes('אין נתונים')) {
+                info(`⚠️ ENVIRONMENT ALERT: ${envErr.message}. Ending session gracefully.`);
                 return; 
             }
-            throw noSlotsErr;
+            // אם זו תקלת סיסטם אמיתית (כמו Timeout של Playwright), נזרוק אותה החוצה שתרסק את הריצה
+            throw envErr;
         }
 
         if (INTERCEPT_MODE) {

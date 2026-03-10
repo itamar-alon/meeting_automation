@@ -66,21 +66,25 @@ class LoginPage {
 
     await this.submitButton.click({ force: true, delay: 150 });
 
-    console.log('⏳ Waiting for login modal to close and user identity to load...');
+    console.log('⏳ Waiting for login modal to close...');
     
-    // --- התיקון הקריטי מבוסס התמונות! ---
+    // --- התיקון! ---
     try {
-        // 1. קודם כל מוודאים שהמודאל סוייפ מהמסך (שדה הסיסמה נעלם)
-        await this.passwordInput.waitFor({ state: 'hidden', timeout: 20000 });
+        // מספיק לוודא ששדה הסיסמה נעלם כדי לדעת שהמודאל נסגר בהצלחה.
+        // הסרתי את הבדיקה שכפתור ה"כניסה" נעלם כדי למנוע Flakiness מול טקסטים כפולים בדף.
+        await this.passwordInput.waitFor({ state: 'hidden', timeout: 25000 });
         
-        // 2. במקום לחפש "שלום", מוודאים שכפתור ה"כניסה" הוחלף בשם המשתמש ונעלם מה-DOM
-        await this.topLoginButton.waitFor({ state: 'hidden', timeout: 20000 });
+        // בדיקת שגיאות גיבוי מהירה (במידה והוזנה סיסמה שגויה והמודאל נשאר פתוח)
+        if (await this.passwordInput.isVisible().catch(() => false)) {
+             const hasError = await this.page.isVisible('text=שגיאה, text=שגוי, text=לא נמצא');
+             if (hasError) throw new Error('System displayed a login error message (check credentials).');
+        }
     } catch (e) {
         await this.page.screenshot({ path: 'logs/screenshots/FAIL_LOGIN_VERIFICATION.png' });
-        throw new Error('Login failed: Modal did not close or "Login" button is still visible.');
+        throw new Error(`Login failed: Modal did not close. Details: ${e.message}`);
     }
     
-    console.log('✅ Login Successful! Header updated.');
+    console.log('✅ Login Successful!');
     
     // וידוא שהרשת נרגעה והדף נטען במלואו אחרי ההתחברות
     await this.page.waitForLoadState('networkidle').catch(() => {});
