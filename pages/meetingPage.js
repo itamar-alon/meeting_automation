@@ -107,27 +107,46 @@ class AppointmentsPage {
              .last();
 
         // Playwright יודע לחכות בעצמו שהכפתור יהיה גלוי, זמין ומוכן ללחיצה.
-        // הסרנו את ה-elementHandle שעושה בעיות עם רינדור מחדש של React.
         await submitBtnLocator.waitFor({ state: 'visible', timeout: 30000 });
         
         // המתנה קצרה כדי לתת למערכת לעדכן את הטופס שהשעה נבחרה בהצלחה
         console.log('⏳ Waiting a moment for React state to sync before clicking...');
         await this.page.waitForTimeout(2000);
         
-        // click מוודא אוטומטית שהכפתור enabled ולא מקבל pointer-events: none
-        await submitBtnLocator.click({ delay: 300, force: true }); 
+        // --- מנגנון לחיצה חכם ועקשן ---
+        for (let i = 0; i < 3; i++) {
+            await submitBtnLocator.click({ delay: 300, force: true }); 
+            console.log(`✅ Clicked submit button (Attempt ${i + 1}).`);
 
-        // מנגנון הגנה: אם הכפתור עדיין שם אחרי הלחיצה, נבצע לחיצה נוספת
-        try {
-            if (await submitBtnLocator.isVisible({ timeout: 1500 })) {
-                console.log('🔄 Button still visible, executing a second click just in case...');
-                await submitBtnLocator.click({ delay: 300, force: true });
+            try {
+                // נחכה 3 שניות לראות איך המערכת מגיבה ללחיצה
+                await this.page.waitForTimeout(3000);
+                
+                const isVisible = await submitBtnLocator.isVisible();
+                if (!isVisible) {
+                    console.log('✅ Button disappeared. Submission is processing...');
+                    break; // יוצאים מהלולאה, הלחיצה עבדה!
+                }
+
+                // בודקים אם הכפתור עבר למצב disabled (למשל, יש ספינר טעינה שרץ ברקע)
+                const isDisabled = await submitBtnLocator.evaluate(
+                    btn => btn.disabled || btn.getAttribute('aria-disabled') === 'true'
+                ).catch(() => true);
+                
+                if (isDisabled) {
+                    console.log('✅ Button is disabled/loading. Submission is processing...');
+                    break; // יוצאים מהלולאה, הבקשה נשלחה לשרת!
+                }
+
+                console.log('🔄 Button is still active and visible. Click was likely swallowed by React. Clicking again...');
+            } catch (e) {
+                // אם הגענו לכאן, האלמנט כנראה נותק מה-DOM (הדף התחלף לגמרי)
+                console.log('✅ Button detached from DOM. Submission is processing...');
+                break;
             }
-        } catch (e) {
-            // הכל בסדר, הכפתור נעלם או שהדף התחלף
         }
 
-        console.log('✅ Clicked submit button. Now waiting for server response...');
+        console.log('⏳ Finished submit sequence. Now waiting for server response...');
     }
 
     async verifySuccessAndClose() {
