@@ -1,109 +1,92 @@
 class LoginPage {
+
   constructor(page) {
     this.page = page;
 
-    // --- דף הבית ---
     this.topLoginButton = page.locator('text=כניסה').first();
-    this.scheduleLink = page.getByText('זימון פגישות'); 
-
-    // --- מודאל התחברות ---
-    this.passwordTab = page.getByText('באמצעות סיסמה');
-    
-    this.idInput = page.getByLabel('תעודת זהות'); 
-    
-    // שדה סיסמה
-    this.passwordInput = page.locator('input[type="password"]'); 
-    
-    this.submitButton = page.locator('button, input[type="submit"]').filter({ hasText: 'כניסה' }).last(); 
-    
-    // סלקטור חדש לאימות לוגין: שם המשתמש שמופיע למעלה (למשל "שלום, ישראל ישראלי")
+    this.scheduleLink = page.locator('text=זימון פגישות').first();
+    this.passwordTab = page.locator('text=באמצעות סיסמה');
+    this.idInput = page.getByLabel('תעודת זהות');
+    this.passwordInput = page.locator('input[type="password"]');
+    this.submitButton = page.locator('button, input[type="submit"]')
+                             .filter({ hasText: 'כניסה' })
+                             .last();
     this.userDisplayName = page.locator('.user-name, .profile-name, text=שלום');
   }
 
   async performMainLogin(userId, password) {
     console.log('🔑 Step 1: Checking Main Login Button...');
-    
-    // התיקון: בדיקה האם מודאל ההתחברות כבר פתוח כדי למנוע לחיצה כפולה
+
     const isPasswordTabVisible = await this.passwordTab.isVisible().catch(() => false);
-    
+
     if (!isPasswordTabVisible) {
-        try {
-            await this.topLoginButton.waitFor({ state: 'attached', timeout: 20000 });
-            await this.topLoginButton.waitFor({ state: 'visible', timeout: 20000 });
-            await this.topLoginButton.click({ force: true });
-        } catch (e) {
-            await this.page.screenshot({ path: 'logs/screenshots/debug_no_login_btn.png', fullPage: true });
-            throw new Error(`Could not find or click "Login" button: ${e.message}`);
-        }
+      try {
+        await this.topLoginButton.waitFor({ state: 'visible', timeout: 20000 });
+        await this.topLoginButton.scrollIntoViewIfNeeded();
+        await this.topLoginButton.click({ force: true });
+      } catch (e) {
+        await this.page.screenshot({ path: 'logs/screenshots/debug_no_login_btn.png', fullPage: true });
+        throw new Error(`Could not find or click "Login" button: ${e.message}`);
+      }
     } else {
-        console.log('🔑 Step 1: Login modal is already open, skipping top button click...');
+      console.log('🔑 Step 1: Login modal is already open, skipping top button click...');
     }
 
     console.log('🔄 Step 2: Switching to Password Tab...');
     await this.passwordTab.waitFor({ state: 'visible', timeout: 15000 });
-    // שימוש ב-force כדי למנוע בעיות של אנימציות React שמסתירות את האלמנט
+    await this.passwordTab.scrollIntoViewIfNeeded();
     await this.passwordTab.click({ force: true });
 
     console.log('✍️ Step 3: Filling credentials...');
     await this.idInput.waitFor({ state: 'visible', timeout: 10000 });
-    await this.idInput.click();
+    await this.idInput.scrollIntoViewIfNeeded();
     await this.idInput.fill(userId);
-    
-    await this.page.waitForTimeout(800);
 
     await this.passwordInput.waitFor({ state: 'visible', timeout: 10000 });
-    await this.passwordInput.click(); 
+    await this.passwordInput.scrollIntoViewIfNeeded();
     await this.passwordInput.fill(password);
 
     console.log('🚀 Step 4: Submitting login...');
     await this.submitButton.waitFor({ state: 'visible', timeout: 10000 });
-    
-    // מוודאים שהכפתור באמת enabled לפני שלוחצים עליו
-    await this.page.waitForFunction(
-        btn => !btn.disabled,
-        await this.submitButton.elementHandle()
-    ).catch(() => console.log('⚠️ Could not verify button disabled state, proceeding anyway...'));
+
+    try {
+      await this.submitButton.waitFor({ state: 'enabled', timeout: 10000 });
+    } catch {
+      console.log('⚠️ Could not verify button enabled state, proceeding anyway...');
+    }
 
     await this.submitButton.click({ force: true, delay: 150 });
 
     console.log('⏳ Waiting for login modal to close...');
-    
-    // --- התיקון! ---
     try {
-        // מספיק לוודא ששדה הסיסמה נעלם כדי לדעת שהמודאל נסגר בהצלחה.
-        // הסרתי את הבדיקה שכפתור ה"כניסה" נעלם כדי למנוע Flakiness מול טקסטים כפולים בדף.
-        await this.passwordInput.waitFor({ state: 'hidden', timeout: 25000 });
-        
-        // בדיקת שגיאות גיבוי מהירה (במידה והוזנה סיסמה שגויה והמודאל נשאר פתוח)
-        if (await this.passwordInput.isVisible().catch(() => false)) {
-             const hasError = await this.page.isVisible('text=שגיאה, text=שגוי, text=לא נמצא');
-             if (hasError) throw new Error('System displayed a login error message (check credentials).');
-        }
+      await this.passwordInput.waitFor({ state: 'hidden', timeout: 25000 });
+
+      const hasError = (await this.page.locator('text=שגיאה, text=שגוי, text=לא נמצא').count()) > 0;
+      if (hasError) {
+        throw new Error('System displayed a login error message (check credentials).');
+      }
+
     } catch (e) {
-        await this.page.screenshot({ path: 'logs/screenshots/FAIL_LOGIN_VERIFICATION.png' });
-        throw new Error(`Login failed: Modal did not close. Details: ${e.message}`);
+      await this.page.screenshot({ path: 'logs/screenshots/FAIL_LOGIN_VERIFICATION.png', fullPage: true });
+      throw new Error(`Login failed: Modal did not close or error detected. Details: ${e.message}`);
     }
-    
+
     console.log('✅ Login Successful!');
-    
-    // וידוא שהרשת נרגעה והדף נטען במלואו אחרי ההתחברות
     await this.page.waitForLoadState('networkidle').catch(() => {});
-    await this.page.waitForTimeout(2000); 
+    await this.page.waitForTimeout(2000);
   }
 
   async navigateToAppointments() {
     console.log('📅 Navigating to Appointments Wizard...');
     try {
-        // וידוא שהאלמנט קיים בדף (השתמשתי ב-scrollIntoView כדי לוודא שהוא נגיש)
-        const link = this.scheduleLink.first();
-        await link.waitFor({ state: 'visible', timeout: 20000 });
-        await link.scrollIntoViewIfNeeded();
-        
-        console.log('🖱️ Clicking on Appointments link...');
-        await link.click({ force: true }); // מניעת התנגשות עם header דביק
+      const link = this.scheduleLink;
+      await link.waitFor({ state: 'visible', timeout: 20000 });
+      await link.scrollIntoViewIfNeeded();
+      console.log('🖱️ Clicking on Appointments link...');
+      await link.click({ force: true });
     } catch (e) {
-        await this.page.screenshot({ path: `logs/screenshots/debug_nav_fail_${Date.now()}.png` });
-        throw new Error(`Failed to navigate to Appointments: ${e.message}`);
+      await this.page.screenshot({ path: `logs/screenshots/debug_nav_fail_${Date.now()}.png`, fullPage: true });
+      throw new Error(`Failed to navigate to Appointments: ${e.message}`);
     }
   }
 }
