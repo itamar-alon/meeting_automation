@@ -14,6 +14,22 @@ class LoginPage {
     this.userDisplayName = page.locator('.user-name, .profile-name, text=שלום');
   }
 
+  // --- פונקציה חדשה שהוספנו לבדיקת מצב התחברות ---
+  async checkIfLoggedIn() {
+    console.log('🔍 Checking if user is already logged in...');
+    try {
+        // נחכה עד 5 שניות שכפתור הכניסה יופיע
+        await this.topLoginButton.waitFor({ state: 'visible', timeout: 5000 });
+        // אם לא נזרקה שגיאה, משמע הכפתור הופיע = אנחנו לא מחוברים
+        return false; 
+    } catch (error) {
+        // אם עברו 5 שניות והכפתור לא הופיע (נזרק Timeout), אנחנו כנראה מחוברים
+        console.log('✅ Login button not found. Assuming session is valid.');
+        return true;
+    }
+  }
+  // ------------------------------------------------
+
   async performMainLogin(userId, password) {
     console.log('🔑 Step 1: Checking Main Login Button...');
 

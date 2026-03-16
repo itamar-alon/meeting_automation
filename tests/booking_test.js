@@ -3,35 +3,22 @@ const { chromium } = require('playwright');
 const { performance } = require('perf_hooks');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process'); // נדרש לניקוי תהליכים
+const { execSync } = require('child_process');
 
 // --- הגדרות נתיבים ---
 const LOKI_URL = 'http://10.77.72.45:3100/loki/api/v1/push';
 const JOB_NAME = 'meeting_automation';
 const LOG_DIR = path.resolve(__dirname, '..', 'logs');
 const SCREEN_DIR = path.resolve(LOG_DIR, 'screenshots');
+const AUTH_PATH = path.resolve(__dirname, 'auth_state.json');
 
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 if (!fs.existsSync(SCREEN_DIR)) fs.mkdirSync(SCREEN_DIR, { recursive: true });
 
-// --- פונקציית ניקוי תהליכים (חדש!) ---
-function killOldProcesses() {
-    if (process.platform === 'win32') {
-        try {
-            console.log('🧹 Cleaning up old browser processes...');
-            // מנקה תהליכי כרום ודרייברים תקועים
-            execSync('taskkill /f /im chrome.exe /t 2>nul || exit 0');
-            execSync('taskkill /f /im chromedriver.exe /t 2>nul || exit 0');
-            // תוספת קטנה לניקוי תהליכי פליירייט שנתקעו ברקע
-            execSync('taskkill /f /im node.exe /fi "WINDOWTITLE eq Playwright*" /t 2>nul || exit 0');
-            console.log('✅ Cleanup complete.');
-        } catch (e) {
-            // התעלמות משגיאות אם אין תהליכים פתוחים
-        }
-    }
-}
+// --- פונקציית ניקוי תהליכים (מושבתת לבקשתך) ---
+function killOldProcesses() {}
 
-// --- פונקציות לוג משודרגות ---
+// --- פונקציות לוג ---
 async function sendToLoki(level, message, durationMs = null, retries = 3) {
     const ts = (Date.now() * 1_000_000).toString();
     let logMessage = message;
@@ -89,10 +76,7 @@ async function takeScreenshot(page, step) {
 (async () => {
     const ENV = (process.env.TEST_ENV || 'TEST').toUpperCase();
     const INTERCEPT_MODE = ENV === 'PROD';
-    let browser, page;
-
-    // הרצת ניקוי לפני תחילת הסשן
-    killOldProcesses();
+    let browser, page, context;
 
     try {
         const { LoginPage } = require('../pages/loginPage.js');
@@ -108,18 +92,20 @@ async function takeScreenshot(page, step) {
         browser = await chromium.launch({ 
             headless: false, 
             slowMo: 100,
-            // הוספת דגלים לשיפור יציבות ומניעת זליגת זיכרון
             args: [
                 '--no-sandbox', 
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-first-run',
-                '--no-zygote',
-                '--remote-debugging-port=9222' // הוסר single-process והתווסף פורט קבוע
+                '--disable-dev-shm-usage'
             ]
         });
 
-        const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, ignoreHTTPSErrors: true });
+        let storageState = fs.existsSync(AUTH_PATH) ? AUTH_PATH : undefined;
+        
+        context = await browser.newContext({ 
+            viewport: { width: 1280, height: 720 }, 
+            ignoreHTTPSErrors: true,
+            storageState: storageState 
+        });
+
         page = await context.newPage();
         page.setDefaultTimeout(60000); 
 
@@ -129,17 +115,29 @@ async function takeScreenshot(page, step) {
 
         // --- שלב 1: כניסה ---
         await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-        const cookieBtn = page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
-        if (await cookieBtn.isVisible({ timeout: 5000 })) await cookieBtn.click({ force: true });
-
-        const loginBtn = page.locator('button:has-text("כניסה")').first();
-        await loginBtn.waitFor({ state: 'visible', timeout: 30000 });
-        await loginBtn.click();
         
-        await loginPage.performMainLogin(process.env.USER_ID, process.env.USER_PASS);
-        await page.waitForLoadState('networkidle');
-        await loginPage.navigateToAppointments();
+        const cookieBtn = page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
+        if (await cookieBtn.isVisible({ timeout: 3000 })) await cookieBtn.click({ force: true });
 
+        // כאן הקסם קורה: קוראים לפונקציה שיצרנו בקובץ LoginPage
+        const isAlreadyLoggedIn = await loginPage.checkIfLoggedIn();
+
+        if (!isAlreadyLoggedIn) {
+            info('🔑 No valid session found. Performing login...');
+            
+            // מבצעים לוגין אמיתי
+            await loginPage.performMainLogin(process.env.USER_ID, process.env.USER_PASS);
+            await page.waitForLoadState('networkidle');
+            
+            // שומרים את ההתחברות לקובץ רק אחרי שהיא הצליחה!
+            await context.storageState({ path: AUTH_PATH });
+            info('💾 Session saved to auth_state.json');
+        } else {
+            info('✅ Session restored from storage. Skipping login.');
+        }
+
+        // ממשיכים כרגיל לניווט
+        await loginPage.navigateToAppointments();
         await page.waitForLoadState('networkidle');
 
         // --- שלב 2: זימון ---
@@ -150,12 +148,10 @@ async function takeScreenshot(page, step) {
             
             await bookingPage.findAndPickAvailableAppointment();
         } catch (envErr) {
-            // תפיסה חכמה של שגיאות נתונים - מסווג אותן תחת תקינות סביבה ולא תחת סיסטם
             if (envErr.message.includes('No slots found') || envErr.message.includes('ENVIRONMENT_ERROR') || envErr.message.includes('אין נתונים')) {
                 info(`⚠️ ENVIRONMENT ALERT: ${envErr.message}. Ending session gracefully.`);
                 return; 
             }
-            // אם זו תקלת סיסטם אמיתית (כמו Timeout של Playwright), נזרוק אותה החוצה שתרסק את הריצה
             throw envErr;
         }
 
@@ -206,7 +202,6 @@ async function takeScreenshot(page, step) {
         process.exitCode = 1;
     } finally {
         if (browser) await browser.close();
-        // השהייה קצרה לוודא שכל הלוגים נשלחו ל-Loki לפני היציאה
         setTimeout(() => process.exit(process.exitCode || 0), 2000);
     }
 })();
