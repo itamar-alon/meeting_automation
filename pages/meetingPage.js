@@ -3,7 +3,22 @@ class AppointmentsPage {
         this.page = page;
     }
 
+    // פונקציה חדשה לטיפול בעוגיות כדי שנוכל לקרוא לה מכל מקום מוקדם ככל האפשר
+    async dismissCookieBanner() {
+        const cookieBtn = this.page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
+        try {
+            await cookieBtn.waitFor({ state: 'visible', timeout: 3000 });
+            await cookieBtn.click({ force: true });
+            await this.page.waitForTimeout(500);
+        } catch (e) {
+            // הבאנר לא קיים, אפשר להמשיך
+        }
+    }
+
     async selectOption(optionText) {
+        // סוגרים את העוגיות לפני שמנסים ללחוץ על אופציות כדי שלא יחסמו לנו את המסך
+        await this.dismissCookieBanner();
+
         const option = this.page.getByText(optionText).last(); 
         const noResults = this.page.getByText('אין תוצאות חיפוש מתאימות').last();
 
@@ -13,6 +28,8 @@ class AppointmentsPage {
             throw new Error(`ENVIRONMENT_ERROR: אין נתונים עבור הערך "${optionText}"`);
         }
 
+        // מוודא שהאלמנט גלוי לפני הלחיצה
+        await option.scrollIntoViewIfNeeded();
         await option.click();
         await this.page.waitForTimeout(1000); 
     }
@@ -20,11 +37,8 @@ class AppointmentsPage {
     async findAndPickAvailableAppointment() {
         console.log('📅 Scanning calendar: Checking dates with step-refresh logic.');
 
-        const cookieBtn = this.page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
-        try {
-            await cookieBtn.click({ force: true, timeout: 3000 });
-            await this.page.waitForTimeout(1000);
-        } catch (e) {}
+        // גיבוי ליתר ביטחון, במקרה והבאנר קפץ שוב
+        await this.dismissCookieBanner();
 
         let foundSlot = false;
         let monthLimit = 0; // הגבלה לחיפוש עד 4 חודשים קדימה
@@ -43,7 +57,13 @@ class AppointmentsPage {
             if (dayCount > 0) {
                 let checkedDates = [];
                 for (let i = 0; i < dayCount; i++) {
-                    const day = allDays.nth(i);
+                    // חשוב: דוגמים מחדש את הימים בכל איטרציה כי ברגע שנכנסים ויוצאים מדף הפעמים, ה-DOM נבנה מחדש
+                    const currentDaysList = this.page.locator(daySelector);
+                    const currentDayCount = await currentDaysList.count();
+                    
+                    if (i >= currentDayCount) break; // הגנת חריגה
+
+                    const day = currentDaysList.nth(i);
                     const text = await day.innerText();
                     const dateNum = text.trim();
 
@@ -70,7 +90,18 @@ class AppointmentsPage {
                             return;
                         }
                     } catch (e) {
-                        console.log(`- No hours for ${dateNum}.`);
+                        console.log(`- No hours for ${dateNum}. Clicking back to calendar.`);
+                        
+                        // תוספת קריטית: לחיצה על כפתור "חזור" כדי לפתוח חזרה את היומן
+                        const backBtn = this.page.getByText('חזור', { exact: true }).first();
+                        try {
+                            if (await backBtn.isVisible()) {
+                                await backBtn.click({ force: true });
+                                await this.page.waitForTimeout(1000); // ממתינים לרינדור של הלוח שנה בחזרה
+                            }
+                        } catch (backErr) {
+                            console.log('⚠️ Could not click back button.');
+                        }
                     }
                 }
             }

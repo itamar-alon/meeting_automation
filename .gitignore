@@ -5,3 +5,4 @@ logs/
 *.png
 selfREADME.md
 run_tests.bat
+auth_state.json
