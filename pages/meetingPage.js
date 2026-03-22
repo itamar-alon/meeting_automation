@@ -144,13 +144,24 @@ class AppointmentsPage {
         console.log('⏳ Waiting a moment for React state to sync before clicking...');
         await this.page.waitForTimeout(2000);
         
+        // סלקטור להודעות שגיאה שקופצות (כמו שגיאת כפילות תורים או תור תפוס)
+        const errorPopupLocator = this.page.locator('text=שגיאה, text=כבר קיים תור, text=התור נתפס, text=409').first();
+
         for (let i = 0; i < 3; i++) {
             await submitBtnLocator.click({ delay: 300, force: true }); 
             console.log(`✅ Clicked submit button (Attempt ${i + 1}).`);
 
             try {
+                // ממתינים קצת אחרי הלחיצה
                 await this.page.waitForTimeout(3000);
                 
+                // בודקים אם קפצה שגיאה
+                const hasError = await errorPopupLocator.isVisible().catch(() => false);
+                if (hasError) {
+                     const errorText = await errorPopupLocator.innerText().catch(() => 'Unknown Error');
+                     throw new Error(`System rejected the booking. Reason: ${errorText}`);
+                }
+
                 const isVisible = await submitBtnLocator.isVisible();
                 if (!isVisible) {
                     console.log('✅ Button disappeared. Submission is processing...');
@@ -168,6 +179,9 @@ class AppointmentsPage {
 
                 console.log('🔄 Button is still active and visible. Clicking again...');
             } catch (e) {
+                 if(e.message.includes('System rejected the booking')) {
+                     throw e; // מעבירים את השגיאה הלאה כדי שהסקריפט ייכשל מיד
+                 }
                 console.log('✅ Button detached from DOM. Submission is processing...');
                 break;
             }
@@ -180,14 +194,27 @@ class AppointmentsPage {
         console.log('⏳ Verifying success message (Waiting up to 90s for slow server)...');
 
         const successHeader = this.page.locator('h4:has-text("פגישתך נקבעה בהצלחה")');
+        const generalErrorLocator = this.page.locator('text=שגיאה מערכתית, text=אירעה תקלה').first();
 
-        await successHeader.waitFor({ state: 'visible', timeout: 90000 });
-        console.log('✅ Success message detected!');
+        try {
+            // ממתינים להצלחה או לשגיאה שצצה מאוחר
+            await Promise.race([
+                successHeader.waitFor({ state: 'visible', timeout: 90000 }),
+                generalErrorLocator.waitFor({ state: 'visible', timeout: 90000 }).then(() => {
+                    throw new Error('System displayed an error message instead of success.');
+                })
+            ]);
+            
+            console.log('✅ Success message detected!');
+            
+            const closeBtn = this.page.locator('button:has-text("סגירה")').first();
+            await closeBtn.click({ force: true });
+            
+            await successHeader.waitFor({ state: 'hidden', timeout: 15000 });
 
-        const closeBtn = this.page.locator('button:has-text("סגירה")').first();
-        await closeBtn.click({ force: true });
-
-        await successHeader.waitFor({ state: 'hidden', timeout: 15000 });
+        } catch (e) {
+             throw new Error(`Verification failed. Details: ${e.message}`);
+        }
     }
 }
 

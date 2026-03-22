@@ -5,12 +5,14 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-// --- הגדרות נתיבים ---
+// --- הגדרות סביבה ונתיבים ---
+const ENV = (process.env.TEST_ENV || 'TEST').toUpperCase();
 const LOKI_URL = 'http://10.77.72.45:3100/loki/api/v1/push';
 const JOB_NAME = 'meeting_automation';
 const LOG_DIR = path.resolve(__dirname, '..', 'logs');
 const SCREEN_DIR = path.resolve(LOG_DIR, 'screenshots');
-const AUTH_PATH = path.resolve(__dirname, 'auth_state.json');
+// יצירת קובץ התחברות נפרד לכל סביבה כדי למנוע התנגשויות
+const AUTH_PATH = path.resolve(__dirname, `auth_state_${ENV}.json`);
 
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 if (!fs.existsSync(SCREEN_DIR)) fs.mkdirSync(SCREEN_DIR, { recursive: true });
@@ -74,7 +76,6 @@ async function takeScreenshot(page, step) {
 
 // --- Main Script ---
 (async () => {
-    const ENV = (process.env.TEST_ENV || 'TEST').toUpperCase();
     const INTERCEPT_MODE = ENV === 'PROD';
     let browser, page, context;
 
@@ -131,7 +132,7 @@ async function takeScreenshot(page, step) {
             
             // שומרים את ההתחברות לקובץ רק אחרי שהיא הצליחה!
             await context.storageState({ path: AUTH_PATH });
-            info('💾 Session saved to auth_state.json');
+            info(`💾 Session saved to auth_state_${ENV}.json`);
         } else {
             info('✅ Session restored from storage. Skipping login.');
         }
@@ -148,7 +149,13 @@ async function takeScreenshot(page, step) {
             
             await bookingPage.findAndPickAvailableAppointment();
         } catch (envErr) {
-            if (envErr.message.includes('No slots found') || envErr.message.includes('ENVIRONMENT_ERROR') || envErr.message.includes('אין נתונים')) {
+            // הוספנו כאן את הטקסטים המעודכנים מתוך הפונקציה כדי למנוע קריסה קריטית במקרה שאין תורים
+            if (envErr.message.includes('No slots found') || 
+                envErr.message.includes('ENVIRONMENT_ERROR') || 
+                envErr.message.includes('אין נתונים') ||
+                envErr.message.includes('no available appointments') || 
+                envErr.message.includes('No more appointments')) {
+                
                 info(`⚠️ ENVIRONMENT ALERT: ${envErr.message}. Ending session gracefully.`);
                 return; 
             }

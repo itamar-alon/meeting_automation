@@ -9,8 +9,8 @@ class LoginPage {
     this.idInput = page.getByLabel('תעודת זהות');
     this.passwordInput = page.locator('input[type="password"]');
     this.submitButton = page.locator('button, input[type="submit"]')
-                             .filter({ hasText: 'כניסה' })
-                             .last();
+                         .filter({ hasText: 'כניסה' })
+                         .last();
     this.userDisplayName = page.locator('.user-name, .profile-name, text=שלום');
   }
 
@@ -73,15 +73,19 @@ class LoginPage {
 
     await this.submitButton.click({ force: true, delay: 150 });
 
-    console.log('⏳ Waiting for login modal to close...');
+    console.log('⏳ Waiting for login modal to close or for error message...');
     try {
-      await this.passwordInput.waitFor({ state: 'hidden', timeout: 25000 });
-
-      const hasError = (await this.page.locator('text=שגיאה, text=שגוי, text=לא נמצא').count()) > 0;
-      if (hasError) {
-        throw new Error('System displayed a login error message (check credentials).');
-      }
-
+      // חיפוש הודעת שגיאה כללית או את ההודעה הספציפית
+      const errorLocator = this.page.locator('text=אחד מהפרטים שהוזנו אינו מזוהה, text=שגיאה, text=שגוי, text=לא נמצא').first();
+      
+      // נמתין במקביל: או שהמודאל ייסגר (הצלחה), או שתקפוץ שגיאה (כישלון)
+      await Promise.race([
+        this.passwordInput.waitFor({ state: 'hidden', timeout: 25000 }),
+        errorLocator.waitFor({ state: 'visible', timeout: 25000 }).then(() => { 
+            throw new Error('System displayed a login error message (check credentials).'); 
+        })
+      ]);
+      
     } catch (e) {
       await this.page.screenshot({ path: 'logs/screenshots/FAIL_LOGIN_VERIFICATION.png', fullPage: true });
       throw new Error(`Login failed: Modal did not close or error detected. Details: ${e.message}`);
