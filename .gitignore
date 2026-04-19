@@ -1,8 +1,11 @@
 node_modules/
-logs/
-.env
+**/logs/
 *.log
+.env
 *.png
+auth_state*.json
+.vscode/
+.DS_Store
+Thumbs.db
 selfREADME.md
 run_tests.bat
-auth_state.json

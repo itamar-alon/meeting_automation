@@ -15,6 +15,14 @@ class AppointmentsPage {
         }
     }
 
+    // --- הוספת מנגנון רפרוש כללי במקרה של תקיעה במסך ---
+    async triggerRefreshAndThrow(reason) {
+        console.log(`🔄 מזהה תקיעה (${reason}) - מבצע רפרוש לדף...`);
+        await this.page.reload({ waitUntil: 'networkidle' });
+        // זורקים שגיאה כדי שהלולאה החיצונית שמריצה את הטסט תתחיל את התהליך מחדש במידת הצורך
+        throw new Error(`REFRESH_TRIGGERED: ${reason}`);
+    }
+
     async selectOption(optionText) {
         // סוגרים את העוגיות לפני שמנסים ללחוץ על אופציות כדי שלא יחסמו לנו את המסך
         await this.dismissCookieBanner();
@@ -22,7 +30,12 @@ class AppointmentsPage {
         const option = this.page.getByText(optionText).last(); 
         const noResults = this.page.getByText('אין תוצאות חיפוש מתאימות').last();
 
-        await option.or(noResults).waitFor({ state: 'visible', timeout: 15000 });
+        try {
+            await option.or(noResults).waitFor({ state: 'visible', timeout: 15000 });
+        } catch (e) {
+            // במקרה ששום דבר לא נטען ותקועים באוויר - מבצעים רפרוש
+            await this.triggerRefreshAndThrow(`Timeout waiting for option: ${optionText}`);
+        }
 
         if (await noResults.isVisible()) {
             throw new Error(`ENVIRONMENT_ERROR: אין נתונים עבור הערך "${optionText}"`);
@@ -42,19 +55,31 @@ class AppointmentsPage {
 
         let foundSlot = false;
         let monthLimit = 0; // הגבלה לחיפוש עד 4 חודשים קדימה
+        let retries = 0; // מונה ניסיונות להמתנה ליומן
 
         while (!foundSlot && monthLimit < 4) {
             const daySelector = 'button.MuiPickersDay-root:not(.Mui-disabled):not(.MuiPickersDay-dayOutsideMonth)';
             
-            // מחכים שהיומן יטען
-            await this.page.waitForTimeout(1000);
+            let allDays = this.page.locator(daySelector);
+            try {
+                // נמתין ליום הראשון שיופיע במקום סתם לחכות שניה עיוורת
+                await allDays.first().waitFor({ state: 'visible', timeout: 10000 });
+            } catch (e) {
+                console.log('⏳ היומן לא נטען או שאין ימים פנויים החודש...');
+                // בדיקה אם הדף תקוע על טעינה (השלדים האפורים מהתמונה)
+                const skeletons = await this.page.locator('.MuiSkeleton-root').count();
+                if (skeletons > 0 || retries > 1) {
+                   await this.triggerRefreshAndThrow('Calendar stuck on loading skeletons');
+                }
+                retries++;
+            }
             
-            const allDays = this.page.locator(daySelector);
             const dayCount = await allDays.count();
 
             console.log(`🔎 Found ${dayCount} potentially available days this month.`);
 
             if (dayCount > 0) {
+                retries = 0; // איפוס במקרה של הצלחה
                 let checkedDates = [];
                 for (let i = 0; i < dayCount; i++) {
                     // חשוב: דוגמים מחדש את הימים בכל איטרציה כי ברגע שנכנסים ויוצאים מדף הפעמים, ה-DOM נבנה מחדש
@@ -79,7 +104,7 @@ class AppointmentsPage {
 
                     try {
                         // מחכים פחות זמן לכל יום כדי לרוץ מהר
-                        await timeSlots.first().waitFor({ state: 'visible', timeout: 2500 });
+                        await timeSlots.first().waitFor({ state: 'visible', timeout: 3500 }); // הוגדל מעט כדי לתת לשרת אוויר
 
                         const timeCount = await timeSlots.count();
                         if (timeCount > 0) {
@@ -107,23 +132,25 @@ class AppointmentsPage {
             }
 
             // --- אם הגענו לכאן, לא נמצאו פגישות בחודש הנוכחי ---
-            console.log('➡️ No slots this month. Looking for next month arrow...');
-            
-            // סלקטורים משופרים לחץ "החודש הבא"
-            const nextMonthBtn = this.page.locator('button[aria-label="Next month"], button[aria-label="החודש הבא"], .MuiPickersArrowSwitcher-nextIconButton').first();
-
-            if (await nextMonthBtn.isVisible()) {
-                const isDisabled = await nextMonthBtn.isDisabled();
-                if (isDisabled) {
-                    throw new Error('❌ Next month button is disabled. No more appointments available.');
-                }
+            if (!foundSlot) {
+                console.log('➡️ No slots this month. Looking for next month arrow...');
                 
-                console.log('🚀 Clicking Next Month...');
-                await nextMonthBtn.click({ force: true });
-                await this.page.waitForTimeout(1500); // זמן לרינדור החודש החדש
-                monthLimit++;
-            } else {
-                throw new Error('❌ Could not find the "Next Month" button on the calendar.');
+                // סלקטורים משופרים לחץ "החודש הבא"
+                const nextMonthBtn = this.page.locator('button[aria-label="Next month"], button[aria-label="החודש הבא"], .MuiPickersArrowSwitcher-nextIconButton').first();
+
+                if (await nextMonthBtn.isVisible()) {
+                    const isDisabled = await nextMonthBtn.isDisabled();
+                    if (isDisabled) {
+                        throw new Error('❌ Next month button is disabled. No more appointments available.');
+                    }
+                    
+                    console.log('🚀 Clicking Next Month...');
+                    await nextMonthBtn.click({ force: true });
+                    await this.page.waitForTimeout(1500); // זמן לרינדור החודש החדש
+                    monthLimit++;
+                } else {
+                    throw new Error('❌ Could not find the "Next Month" button on the calendar.');
+                }
             }
         }
 
@@ -139,7 +166,11 @@ class AppointmentsPage {
              .filter({ hasText: /^זימון פגישה$/ })
              .last();
 
-        await submitBtnLocator.waitFor({ state: 'visible', timeout: 30000 });
+        try {
+            await submitBtnLocator.waitFor({ state: 'visible', timeout: 30000 });
+        } catch (e) {
+            await this.triggerRefreshAndThrow('Submit button never appeared');
+        }
         
         console.log('⏳ Waiting a moment for React state to sync before clicking...');
         await this.page.waitForTimeout(2000);
@@ -178,9 +209,15 @@ class AppointmentsPage {
                 }
 
                 console.log('🔄 Button is still active and visible. Clicking again...');
+                
+                // במידה והגענו לניסיון האחרון ושום דבר לא השתנה - נפעיל רפרוש
+                if (i === 2) {
+                    await this.triggerRefreshAndThrow('Submit button clicked multiple times but system is completely unresponsive');
+                }
+
             } catch (e) {
-                 if(e.message.includes('System rejected the booking')) {
-                     throw e; // מעבירים את השגיאה הלאה כדי שהסקריפט ייכשל מיד
+                 if(e.message.includes('System rejected the booking') || e.message.includes('REFRESH_TRIGGERED')) {
+                     throw e; // מעבירים את השגיאה הלאה
                  }
                 console.log('✅ Button detached from DOM. Submission is processing...');
                 break;

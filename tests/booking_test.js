@@ -91,7 +91,7 @@ async function takeScreenshot(page, step) {
         info(`🚀 STARTING SESSION | Env: ${ENV}`);
 
         browser = await chromium.launch({ 
-            headless: false, 
+            headless: true, 
             slowMo: 100,
             args: [
                 '--no-sandbox', 
@@ -141,67 +141,118 @@ async function takeScreenshot(page, step) {
         await loginPage.navigateToAppointments();
         await page.waitForLoadState('networkidle');
 
-        // --- שלב 2: זימון ---
-        try {
-            await bookingPage.selectOption(DEPT);
-            await bookingPage.selectOption(SERVICE);
-            try { await bookingPage.selectOption('טלפוני'); } catch (e) {}
-            
-            await bookingPage.findAndPickAvailableAppointment();
-        } catch (envErr) {
-            // הוספנו כאן את הטקסטים המעודכנים מתוך הפונקציה כדי למנוע קריסה קריטית במקרה שאין תורים
-            if (envErr.message.includes('No slots found') || 
-                envErr.message.includes('ENVIRONMENT_ERROR') || 
-                envErr.message.includes('אין נתונים') ||
-                envErr.message.includes('no available appointments') || 
-                envErr.message.includes('No more appointments')) {
-                
-                info(`⚠️ ENVIRONMENT ALERT: ${envErr.message}. Ending session gracefully.`);
-                return; 
-            }
-            throw envErr;
-        }
+        // --- לולאת התאוששות לשלבים 2 ו-3 ---
+        let attempt = 0;
+        const maxAttempts = 3;
+        let sessionCompleted = false;
 
-        if (INTERCEPT_MODE) {
-            await page.route('**/SetAppointment*', route => route.fulfill({
-                status: 200, contentType: 'application/json',
-                body: JSON.stringify({ "CaseId": 12345, "ScriptResults": { "ReturnCode": 0 } })
-            }));
-        }
-
-        info('🚀 Submitting booking...');
-        const bookingStartTime = performance.now();
-
-        await bookingPage.submitBooking();
-
-        if (!INTERCEPT_MODE) {
-            await bookingPage.verifySuccessAndClose();
-            const bookingDuration = Math.round(performance.now() - bookingStartTime);
-            info('✅ Booking confirmed successfully', bookingDuration);
-
-            // --- שלב 3: ביטול ---
-            info('--- Step 3: Cancellation Starting ---');
-            const futureApptsTab = page.locator('button[role="tab"][aria-label*="פגישות עתידיות"]');
-            
-            if (!(await futureApptsTab.isVisible({ timeout: 5000 }))) {
-                await loginPage.navigateToAppointments();
-            }
-
-            await futureApptsTab.click({ force: true });
-            const apptRow = page.locator('text=נושא:').first();
+        while (attempt < maxAttempts && !sessionCompleted) {
+            attempt++;
             try {
-                await apptRow.waitFor({ state: 'visible', timeout: 20000 });
-            } catch (e) {
-                await futureApptsTab.click();
-                await apptRow.waitFor({ state: 'visible', timeout: 10000 });
-            }
+                if (attempt > 1) {
+                    info(`\n--- 🔄 מתחיל ניסיון התאוששות ${attempt}/${maxAttempts} ---`);
+                }
 
-            await myApptsPage.expandFirstAppointment();
-            await myApptsPage.cancelAppointment();
-            await myApptsPage.confirmCancellation();
-            info('✅ Cancellation finished.');
+                // --- שלב 2: זימון ---
+                await bookingPage.selectOption(DEPT);
+                await bookingPage.selectOption(SERVICE);
+                try { await bookingPage.selectOption('טלפוני'); } catch (e) {}
+                
+                await bookingPage.findAndPickAvailableAppointment();
+
+                if (INTERCEPT_MODE) {
+                    await page.route('**/SetAppointment*', route => route.fulfill({
+                        status: 200, 
+                        contentType: 'application/json',
+                        body: JSON.stringify({
+                            "SetAppointmentData": {
+                                "ParentCaseId": 0, "ServiceId": 124, "DateAndTime": "2026-04-16T10:10:00", 
+                                "UserId": 519, "CustomerId": 211531, "AppointmentTypeId": 0, "Subject": null, 
+                                "Notes": null, "ExtRef": null, "ClassificationIds": null, "PreventAutoQueue": false, 
+                                "LanguageCode": "he", "IsWalkIn": false, "ForceSimultaneousAppointment": true, 
+                                "ForceWastedDuration": false, "AutoFreeUp": false, "SlotOrdinalNumber": 0, 
+                                "CalendarId": 0, "Resources": null, "BasedOnAppointmentRequestId": 0, 
+                                "Duration": 0, "SimulationOnly": false, "ForceNoDynamicVacancy": false, 
+                                "TreatmentPlanId": 0, "TreatmentPlanStepId": 0, "CustomerTreatmentPlanId": 0, 
+                                "ExistingProcessId": 0, "ActOptionId": 0, "CustomProperties": {"1": "PHONE"}
+                            },
+                            "ScriptResults": { "Messages": [], "ReturnCode": 0 },
+                            "CaseId": 1559557,
+                            "ProcessId": 1559416,
+                            "AppointmentId": 117393,
+                            "CalendarId": 80802,
+                            "QNumber": 0,
+                            "QCode": "",
+                            "CustomerTreatmentPlanId": 0
+                        })
+                    }));
+                }
+
+                info('🚀 Submitting booking...');
+                const bookingStartTime = performance.now();
+
+                await bookingPage.submitBooking();
+
+                // מוודאים הצלחה וסוגרים את הפופאפ בשתי הסביבות! (גם TEST וגם PROD)
+                await bookingPage.verifySuccessAndClose();
+                const bookingDuration = Math.round(performance.now() - bookingStartTime);
+                info('✅ Booking confirmed successfully', bookingDuration);
+
+                if (!INTERCEPT_MODE) {
+                    // --- שלב 3: ביטול ---
+                    info('--- Step 3: Cancellation Starting ---');
+                    const futureApptsTab = page.locator('button[role="tab"][aria-label*="פגישות עתידיות"]');
+                    
+                    if (!(await futureApptsTab.isVisible({ timeout: 5000 }))) {
+                        await loginPage.navigateToAppointments();
+                    }
+
+                    await futureApptsTab.click({ force: true });
+                    const apptRow = page.locator('text=נושא:').first();
+                    try {
+                        await apptRow.waitFor({ state: 'visible', timeout: 20000 });
+                    } catch (e) {
+                        await futureApptsTab.click();
+                        await apptRow.waitFor({ state: 'visible', timeout: 10000 });
+                    }
+
+                    await myApptsPage.expandFirstAppointment();
+                    await myApptsPage.cancelAppointment();
+                    await myApptsPage.confirmCancellation();
+                    info('✅ Cancellation finished.');
+                }
+                
+                // סימון שהכל עבר בהצלחה כדי לצאת מהלולאה
+                sessionCompleted = true;
+
+            } catch (err) {
+                if (err.message.includes('REFRESH_TRIGGERED')) {
+                    info(`⚠️ השרת נתקע ובוצע רפרוש. מתחיל סבב מחדש (ניסיון ${attempt} מתוך ${maxAttempts})...`);
+                    await page.waitForTimeout(2000); // נותנים קצת אוויר לשרת
+                    continue; // חוזרים לתחילת הלולאה לבחור מחלקה ושירות
+                } else if (err.message.includes('System rejected the booking')) {
+                    info(`❌ המערכת דחתה את התור (כנראה נתפס בינתיים). נרפרש ונתחיל חיפוש חדש (ניסיון ${attempt} מתוך ${maxAttempts})...`);
+                    await page.reload({ waitUntil: 'networkidle' });
+                    continue; // חוזרים לתחילת הלולאה
+                } else if (err.message.includes('No slots found') || 
+                           err.message.includes('ENVIRONMENT_ERROR') || 
+                           err.message.includes('אין נתונים') ||
+                           err.message.includes('no available appointments') || 
+                           err.message.includes('No more appointments')) {
+                    
+                    info(`⚠️ ENVIRONMENT ALERT: ${err.message}. Ending session gracefully.`);
+                    return; // יציאה מסודרת כי אין באמת תורים
+                }
+                
+                // אם זו שגיאה אחרת שלא ציפינו לה, נזרוק אותה החוצה
+                throw err;
+            }
         }
-        
+
+        if (!sessionCompleted) {
+            throw new Error(`❌ נכשלנו לאחר ${maxAttempts} ניסיונות עקב תקיעות מערכת או דחיות.`);
+        }
+
         info('🎉 SESSION COMPLETED SUCCESSFULLY!');
     } catch (err) {
         await error(`💥 CRITICAL FAILURE: ${err.message}`);
