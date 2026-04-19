@@ -32,7 +32,7 @@ Create a .env file in the root directory based on .env.example:
 קטע קוד
 USER_ID=your_id
 USER_PASS=your_password
-LOKI_URL=http://10.77.72.45:3100/loki/api/v1/push
+LOKI_URL=http://ip:3100/loki/api/v1/push
 🏃 Execution Commands
 Pre-configured scripts for various environments:
 
