@@ -13,6 +13,7 @@ A high-performance **Playwright-based** automation engine designed for intellige
 - **Full Observability**: Streams structured logs to a centralized Loki server with severity levels (`info`, `warn`, `error`).
 - **Automated Evidence**: Captures full-page screenshots (.png) automatically upon any critical failure for rapid debugging.
 - **POM Architecture**: Built using the **Page Object Model** for high maintainability and scalability.
+<img width="1383" height="634" alt="image" src="https://github.com/user-attachments/assets/13ac53f6-c74b-4f4e-95ec-a69a61599dcd" />
 
 ## 🛠 Project Structure
 
@@ -56,4 +57,3 @@ To view errors in your Grafana Dashboard, use the following LogQL query:
 📄 License
 Internal municipal automation project.
 
-<img width="1383" height="634" alt="image" src="https://github.com/user-attachments/assets/13ac53f6-c74b-4f4e-95ec-a69a61599dcd" />
