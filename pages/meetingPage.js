@@ -3,7 +3,6 @@ class AppointmentsPage {
         this.page = page;
     }
 
-    // פונקציה חדשה לטיפול בעוגיות כדי שנוכל לקרוא לה מכל מקום מוקדם ככל האפשר
     async dismissCookieBanner() {
         const cookieBtn = this.page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
         try {
@@ -11,20 +10,16 @@ class AppointmentsPage {
             await cookieBtn.click({ force: true });
             await this.page.waitForTimeout(500);
         } catch (e) {
-            // הבאנר לא קיים, אפשר להמשיך
         }
     }
 
-    // --- הוספת מנגנון רפרוש כללי במקרה של תקיעה במסך ---
     async triggerRefreshAndThrow(reason) {
         console.log(`🔄 מזהה תקיעה (${reason}) - מבצע רפרוש לדף...`);
         await this.page.reload({ waitUntil: 'networkidle' });
-        // זורקים שגיאה כדי שהלולאה החיצונית שמריצה את הטסט תתחיל את התהליך מחדש במידת הצורך
         throw new Error(`REFRESH_TRIGGERED: ${reason}`);
     }
 
     async selectOption(optionText) {
-        // סוגרים את העוגיות לפני שמנסים ללחוץ על אופציות כדי שלא יחסמו לנו את המסך
         await this.dismissCookieBanner();
 
         const option = this.page.getByText(optionText).last(); 
@@ -33,7 +28,6 @@ class AppointmentsPage {
         try {
             await option.or(noResults).waitFor({ state: 'visible', timeout: 15000 });
         } catch (e) {
-            // במקרה ששום דבר לא נטען ותקועים באוויר - מבצעים רפרוש
             await this.triggerRefreshAndThrow(`Timeout waiting for option: ${optionText}`);
         }
 
@@ -41,7 +35,6 @@ class AppointmentsPage {
             throw new Error(`ENVIRONMENT_ERROR: אין נתונים עבור הערך "${optionText}"`);
         }
 
-        // מוודא שהאלמנט גלוי לפני הלחיצה
         await option.scrollIntoViewIfNeeded();
         await option.click();
         await this.page.waitForTimeout(1000); 
@@ -50,23 +43,20 @@ class AppointmentsPage {
     async findAndPickAvailableAppointment() {
         console.log('📅 Scanning calendar: Checking dates with step-refresh logic.');
 
-        // גיבוי ליתר ביטחון, במקרה והבאנר קפץ שוב
         await this.dismissCookieBanner();
 
         let foundSlot = false;
-        let monthLimit = 0; // הגבלה לחיפוש עד 4 חודשים קדימה
-        let retries = 0; // מונה ניסיונות להמתנה ליומן
+        let monthLimit = 0;
+        let retries = 0; 
 
         while (!foundSlot && monthLimit < 4) {
             const daySelector = 'button.MuiPickersDay-root:not(.Mui-disabled):not(.MuiPickersDay-dayOutsideMonth)';
             
             let allDays = this.page.locator(daySelector);
             try {
-                // נמתין ליום הראשון שיופיע במקום סתם לחכות שניה עיוורת
                 await allDays.first().waitFor({ state: 'visible', timeout: 10000 });
             } catch (e) {
                 console.log('⏳ היומן לא נטען או שאין ימים פנויים החודש...');
-                // בדיקה אם הדף תקוע על טעינה (השלדים האפורים מהתמונה)
                 const skeletons = await this.page.locator('.MuiSkeleton-root').count();
                 if (skeletons > 0 || retries > 1) {
                    await this.triggerRefreshAndThrow('Calendar stuck on loading skeletons');
@@ -79,14 +69,13 @@ class AppointmentsPage {
             console.log(`🔎 Found ${dayCount} potentially available days this month.`);
 
             if (dayCount > 0) {
-                retries = 0; // איפוס במקרה של הצלחה
+                retries = 0; 
                 let checkedDates = [];
                 for (let i = 0; i < dayCount; i++) {
-                    // חשוב: דוגמים מחדש את הימים בכל איטרציה כי ברגע שנכנסים ויוצאים מדף הפעמים, ה-DOM נבנה מחדש
                     const currentDaysList = this.page.locator(daySelector);
                     const currentDayCount = await currentDaysList.count();
                     
-                    if (i >= currentDayCount) break; // הגנת חריגה
+                    if (i >= currentDayCount) break; 
 
                     const day = currentDaysList.nth(i);
                     const text = await day.innerText();
@@ -103,8 +92,7 @@ class AppointmentsPage {
                         .filter({ hasText: /^\d{1,2}:\d{2}$/ });
 
                     try {
-                        // מחכים פחות זמן לכל יום כדי לרוץ מהר
-                        await timeSlots.first().waitFor({ state: 'visible', timeout: 3500 }); // הוגדל מעט כדי לתת לשרת אוויר
+                        await timeSlots.first().waitFor({ state: 'visible', timeout: 3500 }); 
 
                         const timeCount = await timeSlots.count();
                         if (timeCount > 0) {
@@ -117,12 +105,11 @@ class AppointmentsPage {
                     } catch (e) {
                         console.log(`- No hours for ${dateNum}. Clicking back to calendar.`);
                         
-                        // תוספת קריטית: לחיצה על כפתור "חזור" כדי לפתוח חזרה את היומן
                         const backBtn = this.page.getByText('חזור', { exact: true }).first();
                         try {
                             if (await backBtn.isVisible()) {
                                 await backBtn.click({ force: true });
-                                await this.page.waitForTimeout(1000); // ממתינים לרינדור של הלוח שנה בחזרה
+                                await this.page.waitForTimeout(1000); 
                             }
                         } catch (backErr) {
                             console.log('⚠️ Could not click back button.');
@@ -131,11 +118,9 @@ class AppointmentsPage {
                 }
             }
 
-            // --- אם הגענו לכאן, לא נמצאו פגישות בחודש הנוכחי ---
             if (!foundSlot) {
                 console.log('➡️ No slots this month. Looking for next month arrow...');
                 
-                // סלקטורים משופרים לחץ "החודש הבא"
                 const nextMonthBtn = this.page.locator('button[aria-label="Next month"], button[aria-label="החודש הבא"], .MuiPickersArrowSwitcher-nextIconButton').first();
 
                 if (await nextMonthBtn.isVisible()) {
@@ -146,7 +131,7 @@ class AppointmentsPage {
                     
                     console.log('🚀 Clicking Next Month...');
                     await nextMonthBtn.click({ force: true });
-                    await this.page.waitForTimeout(1500); // זמן לרינדור החודש החדש
+                    await this.page.waitForTimeout(1500); 
                     monthLimit++;
                 } else {
                     throw new Error('❌ Could not find the "Next Month" button on the calendar.');
@@ -175,7 +160,6 @@ class AppointmentsPage {
         console.log('⏳ Waiting a moment for React state to sync before clicking...');
         await this.page.waitForTimeout(2000);
         
-        // סלקטור להודעות שגיאה שקופצות (כמו שגיאת כפילות תורים או תור תפוס)
         const errorPopupLocator = this.page.locator('text=שגיאה, text=כבר קיים תור, text=התור נתפס, text=409').first();
 
         for (let i = 0; i < 3; i++) {
@@ -183,10 +167,8 @@ class AppointmentsPage {
             console.log(`✅ Clicked submit button (Attempt ${i + 1}).`);
 
             try {
-                // ממתינים קצת אחרי הלחיצה
                 await this.page.waitForTimeout(3000);
                 
-                // בודקים אם קפצה שגיאה
                 const hasError = await errorPopupLocator.isVisible().catch(() => false);
                 if (hasError) {
                      const errorText = await errorPopupLocator.innerText().catch(() => 'Unknown Error');
@@ -210,14 +192,13 @@ class AppointmentsPage {
 
                 console.log('🔄 Button is still active and visible. Clicking again...');
                 
-                // במידה והגענו לניסיון האחרון ושום דבר לא השתנה - נפעיל רפרוש
                 if (i === 2) {
                     await this.triggerRefreshAndThrow('Submit button clicked multiple times but system is completely unresponsive');
                 }
 
             } catch (e) {
                  if(e.message.includes('System rejected the booking') || e.message.includes('REFRESH_TRIGGERED')) {
-                     throw e; // מעבירים את השגיאה הלאה
+                     throw e; 
                  }
                 console.log('✅ Button detached from DOM. Submission is processing...');
                 break;
@@ -234,7 +215,6 @@ class AppointmentsPage {
         const generalErrorLocator = this.page.locator('text=שגיאה מערכתית, text=אירעה תקלה').first();
 
         try {
-            // ממתינים להצלחה או לשגיאה שצצה מאוחר
             await Promise.race([
                 successHeader.waitFor({ state: 'visible', timeout: 90000 }),
                 generalErrorLocator.waitFor({ state: 'visible', timeout: 90000 }).then(() => {

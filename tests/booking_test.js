@@ -5,22 +5,18 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-// --- הגדרות סביבה ונתיבים ---
 const ENV = (process.env.TEST_ENV || 'TEST').toUpperCase();
 const LOKI_URL = 'http://10.77.72.45:3100/loki/api/v1/push';
 const JOB_NAME = 'meeting_automation';
 const LOG_DIR = path.resolve(__dirname, '..', 'logs');
 const SCREEN_DIR = path.resolve(LOG_DIR, 'screenshots');
-// יצירת קובץ התחברות נפרד לכל סביבה כדי למנוע התנגשויות
 const AUTH_PATH = path.resolve(__dirname, `auth_state_${ENV}.json`);
 
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 if (!fs.existsSync(SCREEN_DIR)) fs.mkdirSync(SCREEN_DIR, { recursive: true });
 
-// --- פונקציית ניקוי תהליכים (מושבתת לבקשתך) ---
 function killOldProcesses() {}
 
-// --- פונקציות לוג ---
 async function sendToLoki(level, message, durationMs = null, retries = 3) {
     const ts = (Date.now() * 1_000_000).toString();
     let logMessage = message;
@@ -74,7 +70,6 @@ async function takeScreenshot(page, step) {
     } catch (e) { console.error(`⚠️ Screenshot failed: ${e.message}`); }
 }
 
-// --- Main Script ---
 (async () => {
     const INTERCEPT_MODE = ENV === 'PROD';
     let browser, page, context;
@@ -114,34 +109,28 @@ async function takeScreenshot(page, step) {
         const bookingPage = new AppointmentsPage(page);
         const myApptsPage = new MyAppointmentsPage(page);
 
-        // --- שלב 1: כניסה ---
         await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
         
         const cookieBtn = page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
         if (await cookieBtn.isVisible({ timeout: 3000 })) await cookieBtn.click({ force: true });
 
-        // כאן הקסם קורה: קוראים לפונקציה שיצרנו בקובץ LoginPage
         const isAlreadyLoggedIn = await loginPage.checkIfLoggedIn();
 
         if (!isAlreadyLoggedIn) {
             info('🔑 No valid session found. Performing login...');
             
-            // מבצעים לוגין אמיתי
             await loginPage.performMainLogin(process.env.USER_ID, process.env.USER_PASS);
             await page.waitForLoadState('networkidle');
             
-            // שומרים את ההתחברות לקובץ רק אחרי שהיא הצליחה!
             await context.storageState({ path: AUTH_PATH });
             info(`💾 Session saved to auth_state_${ENV}.json`);
         } else {
             info('✅ Session restored from storage. Skipping login.');
         }
 
-        // ממשיכים כרגיל לניווט
         await loginPage.navigateToAppointments();
         await page.waitForLoadState('networkidle');
 
-        // --- לולאת התאוששות לשלבים 2 ו-3 ---
         let attempt = 0;
         const maxAttempts = 3;
         let sessionCompleted = false;
@@ -153,7 +142,6 @@ async function takeScreenshot(page, step) {
                     info(`\n--- 🔄 מתחיל ניסיון התאוששות ${attempt}/${maxAttempts} ---`);
                 }
 
-                // --- שלב 2: זימון ---
                 await bookingPage.selectOption(DEPT);
                 await bookingPage.selectOption(SERVICE);
                 try { await bookingPage.selectOption('טלפוני'); } catch (e) {}
@@ -193,13 +181,11 @@ async function takeScreenshot(page, step) {
 
                 await bookingPage.submitBooking();
 
-                // מוודאים הצלחה וסוגרים את הפופאפ בשתי הסביבות! (גם TEST וגם PROD)
                 await bookingPage.verifySuccessAndClose();
                 const bookingDuration = Math.round(performance.now() - bookingStartTime);
                 info('✅ Booking confirmed successfully', bookingDuration);
 
                 if (!INTERCEPT_MODE) {
-                    // --- שלב 3: ביטול ---
                     info('--- Step 3: Cancellation Starting ---');
                     const futureApptsTab = page.locator('button[role="tab"][aria-label*="פגישות עתידיות"]');
                     
@@ -222,18 +208,17 @@ async function takeScreenshot(page, step) {
                     info('✅ Cancellation finished.');
                 }
                 
-                // סימון שהכל עבר בהצלחה כדי לצאת מהלולאה
                 sessionCompleted = true;
 
             } catch (err) {
                 if (err.message.includes('REFRESH_TRIGGERED')) {
                     info(`⚠️ השרת נתקע ובוצע רפרוש. מתחיל סבב מחדש (ניסיון ${attempt} מתוך ${maxAttempts})...`);
-                    await page.waitForTimeout(2000); // נותנים קצת אוויר לשרת
-                    continue; // חוזרים לתחילת הלולאה לבחור מחלקה ושירות
+                    await page.waitForTimeout(2000); 
+                    continue; 
                 } else if (err.message.includes('System rejected the booking')) {
                     info(`❌ המערכת דחתה את התור (כנראה נתפס בינתיים). נרפרש ונתחיל חיפוש חדש (ניסיון ${attempt} מתוך ${maxAttempts})...`);
                     await page.reload({ waitUntil: 'networkidle' });
-                    continue; // חוזרים לתחילת הלולאה
+                    continue; 
                 } else if (err.message.includes('No slots found') || 
                            err.message.includes('ENVIRONMENT_ERROR') || 
                            err.message.includes('אין נתונים') ||
@@ -241,10 +226,9 @@ async function takeScreenshot(page, step) {
                            err.message.includes('No more appointments')) {
                     
                     info(`⚠️ ENVIRONMENT ALERT: ${err.message}. Ending session gracefully.`);
-                    return; // יציאה מסודרת כי אין באמת תורים
+                    return; 
                 }
                 
-                // אם זו שגיאה אחרת שלא ציפינו לה, נזרוק אותה החוצה
                 throw err;
             }
         }
