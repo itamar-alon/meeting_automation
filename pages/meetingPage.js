@@ -1,236 +1,232 @@
+const { expect } = require('@playwright/test');
+
 class AppointmentsPage {
     constructor(page) {
         this.page = page;
     }
 
+    async setupAppointmentMock() {
+        await this.page.route('**/SetAppointment*', async route => {
+            console.log("🛡️ INITIATING MOCK: Intercepted real appointment request!");
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    SetAppointmentData: { ServiceId: 262, DateAndTime: "2026-04-01T08:30:00" },
+                    ScriptResults: { Messages: [], ReturnCode: 0 },
+                    CaseId: 1813505,
+                    ProcessId: 1813214,
+                    AppointmentId: 204169,
+                    CalendarId: 91583,
+                    QNumber: 0,
+                    QCode: "",
+                    CustomerTreatmentPlanId: 0
+                })
+            });
+            console.log("✅ MOCK SUCCESS: Injected fake confirmation response.");
+        });
+    }
+
     async dismissCookieBanner() {
-        const cookieBtn = this.page.locator('button:has-text("מאשר הכל"), button:has-text("אישור")');
-        try {
-            await cookieBtn.waitFor({ state: 'visible', timeout: 3000 });
-            await cookieBtn.click({ force: true });
-            await this.page.waitForTimeout(500);
-        } catch (e) {
+        const cookieBtn = this.page.getByRole('button', { name: 'מאשר הכל' });
+        if (await cookieBtn.isVisible({ timeout: 5000 })) {
+            await cookieBtn.click();
+            await cookieBtn.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+            console.log("✅ Cookie banner cleared.");
         }
     }
 
-    async triggerRefreshAndThrow(reason) {
-        console.log(`🔄 מזהה תקיעה (${reason}) - מבצע רפרוש לדף...`);
-        await this.page.reload({ waitUntil: 'networkidle' });
-        throw new Error(`REFRESH_TRIGGERED: ${reason}`);
+    async dismissInitialPopup() {
+        const globalContinueBtn = this.page.getByRole('button', { name: 'המשך' }).first();
+        if (await globalContinueBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+            await globalContinueBtn.click({ force: true });
+            console.log("✅ Initial informational popup cleared.");
+        }
     }
 
-    async selectOption(optionText) {
-        await this.dismissCookieBanner();
+    async completeInitialWizardSteps() {
+        let wizardReady = false;
 
-        const option = this.page.getByText(optionText).last(); 
-        const noResults = this.page.getByText('אין תוצאות חיפוש מתאימות').last();
+        for (let wizardAttempt = 1; wizardAttempt <= 3; wizardAttempt++) {
+            console.log(`Navigating to Appointments wizard (Attempt ${wizardAttempt}/3)...`);
+            
+            await this.page.goto('/'); 
+            await this.page.waitForLoadState('domcontentloaded');
+            await this.dismissCookieBanner();
+            await this.dismissInitialPopup();
+            
+            const appointmentsTile = this.page.getByText(/פגישות|זימון תורים/).first();
+            await appointmentsTile.click();
+            await this.page.waitForLoadState('networkidle').catch(() => {});
 
-        try {
-            await option.or(noResults).waitFor({ state: 'visible', timeout: 15000 });
-        } catch (e) {
-            await this.triggerRefreshAndThrow(`Timeout waiting for option: ${optionText}`);
+            let errorInSteps = false;
+
+            for (let step = 1; step <= 3; step++) {
+                console.log(`Selecting option for Step ${step}...`);
+                await this.page.waitForTimeout(2000); 
+                
+                const noResultsMsg = this.page.getByText('אין תוצאות חיפוש מתאימות').first();
+                if (await noResultsMsg.isVisible()) {
+                    console.log(`⚠️ 'No matching results' found at Step ${step}. Refreshing the flow...`);
+                    errorInSteps = true;
+                    break; 
+                }
+
+                try {
+                    const activeStepContent = this.page.locator('.MuiStepContent-root:visible').last();
+                    const optionToClick = activeStepContent.locator('div[role="button"], li.MuiListItem-root, input[type="radio"] + *').first();
+                    
+                    await expect(optionToClick).toBeVisible({ timeout: 10000 });
+                    await optionToClick.click({ force: true });
+                    await this.page.waitForLoadState('networkidle').catch(() => {});
+                } catch (err) {
+                    console.log(`⚠️ Step ${step} failed to load options properly. Refreshing the flow...`);
+                    errorInSteps = true;
+                    break;
+                }
+            }
+
+            if (!errorInSteps) {
+                wizardReady = true;
+                break; 
+            }
         }
 
-        if (await noResults.isVisible()) {
-            throw new Error(`ENVIRONMENT_ERROR: אין נתונים עבור הערך "${optionText}"`);
+        if (!wizardReady) {
+            throw new Error("Failed to load appointment wizard options after 3 reloads. API might be down.");
         }
-
-        await option.scrollIntoViewIfNeeded();
-        await option.click();
-        await this.page.waitForTimeout(1000); 
     }
 
     async findAndPickAvailableAppointment() {
-        console.log('📅 Scanning calendar: Checking dates with step-refresh logic.');
+        console.log("Handling dynamic dates and times...");
+        let appointmentFound = false;
+        let monthsChecked = 0;
 
-        await this.dismissCookieBanner();
+        while (!appointmentFound && monthsChecked < 3) {
+            await this.page.waitForSelector('.MuiSkeleton-root', { state: 'hidden', timeout: 15000 }).catch(() => {});
+            await this.page.waitForTimeout(3000); 
+        
+        const daysLocator = this.page.locator('button.MuiPickersDay-root:visible:not(.Mui-disabled):not(.MuiPickersDay-hiddenDaySpacingFiller)');
+        const datesCount = await daysLocator.count();
+            console.log(`🔍 Found ${datesCount} available dates in current month.`);
 
-        let foundSlot = false;
-        let monthLimit = 0;
-        let retries = 0; 
-
-        while (!foundSlot && monthLimit < 4) {
-            const daySelector = 'button.MuiPickersDay-root:not(.Mui-disabled):not(.MuiPickersDay-dayOutsideMonth)';
-            
-            let allDays = this.page.locator(daySelector);
-            try {
-                await allDays.first().waitFor({ state: 'visible', timeout: 10000 });
-            } catch (e) {
-                console.log('⏳ היומן לא נטען או שאין ימים פנויים החודש...');
-                const skeletons = await this.page.locator('.MuiSkeleton-root').count();
-                if (skeletons > 0 || retries > 1) {
-                   await this.triggerRefreshAndThrow('Calendar stuck on loading skeletons');
-                }
-                retries++;
-            }
-            
-            const dayCount = await allDays.count();
-
-            console.log(`🔎 Found ${dayCount} potentially available days this month.`);
-
-            if (dayCount > 0) {
-                retries = 0; 
-                let checkedDates = [];
-                for (let i = 0; i < dayCount; i++) {
-                    const currentDaysList = this.page.locator(daySelector);
-                    const currentDayCount = await currentDaysList.count();
-                    
-                    if (i >= currentDayCount) break; 
-
-                    const day = currentDaysList.nth(i);
-                    const text = await day.innerText();
-                    const dateNum = text.trim();
-
-                    if (!dateNum.match(/^\d+$/) || checkedDates.includes(dateNum)) continue;
-
-                    console.log(`🖱️ Clicking date: ${dateNum}`);
-                    checkedDates.push(dateNum);
-
-                    await day.click({ force: true, delay: 300 });
-
-                    const timeSlots = this.page.locator('button, div')
-                        .filter({ hasText: /^\d{1,2}:\d{2}$/ });
-
-                    try {
-                        await timeSlots.first().waitFor({ state: 'visible', timeout: 3500 }); 
-
-                        const timeCount = await timeSlots.count();
-                        if (timeCount > 0) {
-                            console.log(`✅ Found ${timeCount} slots for ${dateNum}.`);
-                            await timeSlots.first().click();
-                            await this.page.waitForLoadState('networkidle');
-                            foundSlot = true;
-                            return;
-                        }
-                    } catch (e) {
-                        console.log(`- No hours for ${dateNum}. Clicking back to calendar.`);
-                        
-                        const backBtn = this.page.getByText('חזור', { exact: true }).first();
-                        try {
-                            if (await backBtn.isVisible()) {
-                                await backBtn.click({ force: true });
-                                await this.page.waitForTimeout(1000); 
-                            }
-                        } catch (backErr) {
-                            console.log('⚠️ Could not click back button.');
-                        }
-                    }
-                }
-            }
-
-            if (!foundSlot) {
-                console.log('➡️ No slots this month. Looking for next month arrow...');
+            for (let i = 0; i < datesCount; i++) {
+                await this.page.waitForTimeout(1000); 
                 
-                const nextMonthBtn = this.page.locator('button[aria-label="Next month"], button[aria-label="החודש הבא"], .MuiPickersArrowSwitcher-nextIconButton').first();
+                const dateBtn = daysLocator.nth(i);
+                
+                try {
+                    await expect(dateBtn).toBeVisible({ timeout: 10000 });
+                    await dateBtn.evaluate(el => el.style.border = '3px solid yellow');
+                    console.log(`🗓️ Clicking date #${i + 1} of ${datesCount}...`);
+                    await dateBtn.click({ force: true });
+                } catch (e) {
+                    console.log(`⚠️ Could not interact with date #${i + 1}. Moving to the next date...`);
+                    continue; 
+                }
 
-                if (await nextMonthBtn.isVisible()) {
-                    const isDisabled = await nextMonthBtn.isDisabled();
-                    if (isDisabled) {
-                        throw new Error('❌ Next month button is disabled. No more appointments available.');
-                    }
-                    
-                    console.log('🚀 Clicking Next Month...');
-                    await nextMonthBtn.click({ force: true });
-                    await this.page.waitForTimeout(1500); 
-                    monthLimit++;
+                await this.page.waitForTimeout(2500); 
+
+                const timeSlots = this.page.locator('button:visible, div[role="button"]:visible, span.MuiChip-root:visible')
+                    .filter({ hasText: /^\d{1,2}:\d{2}$/ })
+                    .filter({ hasNot: this.page.locator('[disabled], .Mui-disabled') });
+                
+                const slotsCount = await timeSlots.count();
+                if (slotsCount > 0) {
+                    console.log(`✅ Found ${slotsCount} visible time slots! Selecting the first one...`);
+                    await timeSlots.first().click({ force: true });
+                    appointmentFound = true;
+                    break; 
                 } else {
-                    throw new Error('❌ Could not find the "Next Month" button on the calendar.');
+                    console.log(`ℹ️ Date #${i + 1} has no times available.`);
+                    
+                    const backBtn = this.page.getByText('חזור').first();
+                    if (await backBtn.isVisible({ timeout: 3000 })) {
+                        console.log("🔙 Clicking 'Back' to return to the calendar view...");
+                        await backBtn.click({ force: true });
+                        await this.page.waitForTimeout(2000); 
+                    } else {
+                        const step4Header = this.page.getByText('מועדים פנויים לפגישה').first();
+                        if (await step4Header.isVisible()) {
+                            console.log("🔙 Clicking Step 4 Header to reopen calendar...");
+                            await step4Header.click({ force: true });
+                            await this.page.waitForTimeout(2000);
+                        }
+                    }
+                    console.log("Moving to the next available date...");
+                    continue; 
+                }
+            }
+
+            if (!appointmentFound) {
+                console.log("⏩ Month finished without results. Moving to Next Month...");
+                const nextMonthBtn = this.page.locator('svg[data-testid="ChevronLeftIcon"]:visible').first().locator('..');
+                try {
+                    if (await nextMonthBtn.isVisible({ timeout: 5000 })) {
+                        await nextMonthBtn.click({ force: true });
+                        monthsChecked++;
+                        await this.page.waitForTimeout(2000); 
+                    } else {
+                        console.log("❌ No Next Month button available.");
+                        break; 
+                    }
+                } catch (err) {
+                    console.log("❌ Failed to click Next Month.");
+                    break;
                 }
             }
         }
 
-        if (!foundSlot) {
-            throw new Error('❌ Scanned multiple months but no available appointments were found.');
+        if (!appointmentFound) {
+            throw new Error("Could not find any available appointments in the next 3 months.");
         }
     }
 
-    async submitBooking() {
-        console.log('🚀 Submitting booking via orange button...');
+async submitBooking() {
+    console.log("Submitting appointment request...");
 
-        const submitBtnLocator = this.page.locator('button.MuiButton-root')
-             .filter({ hasText: /^זימון פגישה$/ })
-             .last();
+    const submitBtn = this.page.locator('button.MuiButton-containedWarning')
+        .filter({ hasText: 'זימון פגישה' })
+        .first();
+    
+    await expect(submitBtn).toBeVisible({ timeout: 20000 });
+    await expect(submitBtn).toBeEnabled({ timeout: 10000 });
+    
+    const responsePromise = this.page.waitForResponse(response => 
+        response.url().includes('SetAppointment') && response.status() === 200,
+        { timeout: 90000 } 
+    ).catch(() => null);
 
-        try {
-            await submitBtnLocator.waitFor({ state: 'visible', timeout: 30000 });
-        } catch (e) {
-            await this.triggerRefreshAndThrow('Submit button never appeared');
-        }
-        
-        console.log('⏳ Waiting a moment for React state to sync before clicking...');
-        await this.page.waitForTimeout(2000);
-        
-        const errorPopupLocator = this.page.locator('text=שגיאה, text=כבר קיים תור, text=התור נתפס, text=409').first();
-
-        for (let i = 0; i < 3; i++) {
-            await submitBtnLocator.click({ delay: 300, force: true }); 
-            console.log(`✅ Clicked submit button (Attempt ${i + 1}).`);
-
-            try {
-                await this.page.waitForTimeout(3000);
-                
-                const hasError = await errorPopupLocator.isVisible().catch(() => false);
-                if (hasError) {
-                     const errorText = await errorPopupLocator.innerText().catch(() => 'Unknown Error');
-                     throw new Error(`System rejected the booking. Reason: ${errorText}`);
-                }
-
-                const isVisible = await submitBtnLocator.isVisible();
-                if (!isVisible) {
-                    console.log('✅ Button disappeared. Submission is processing...');
-                    break;
-                }
-
-                const isDisabled = await submitBtnLocator.evaluate(
-                    btn => btn.disabled || btn.getAttribute('aria-disabled') === 'true'
-                ).catch(() => false);
-                
-                if (isDisabled) {
-                    console.log('✅ Button is disabled/loading. Submission is processing...');
-                    break;
-                }
-
-                console.log('🔄 Button is still active and visible. Clicking again...');
-                
-                if (i === 2) {
-                    await this.triggerRefreshAndThrow('Submit button clicked multiple times but system is completely unresponsive');
-                }
-
-            } catch (e) {
-                 if(e.message.includes('System rejected the booking') || e.message.includes('REFRESH_TRIGGERED')) {
-                     throw e; 
-                 }
-                console.log('✅ Button detached from DOM. Submission is processing...');
-                break;
-            }
-        }
-
-        console.log('⏳ Finished submit sequence. Now waiting for server response...');
+    await submitBtn.evaluate(el => el.style.outline = '5px solid blue');
+    
+    console.log("🖱️ Clicking the confirmed orange button...");
+    await this.page.waitForTimeout(1000);
+    await submitBtn.click({ force: true, delay: 100 });
+    
+    const response = await responsePromise;
+    if (!response) {
+        console.log("⚠️ Server did not respond to SetAppointment call in time.");
+        throw new Error("Server failed to respond to SetAppointment within 90 seconds.");
     }
+}
 
-    async verifySuccessAndClose() {
-        console.log('⏳ Verifying success message (Waiting up to 90s for slow server)...');
-
-        const successHeader = this.page.locator('h4:has-text("פגישתך נקבעה בהצלחה")');
-        const generalErrorLocator = this.page.locator('text=שגיאה מערכתית, text=אירעה תקלה').first();
-
+    async verifySuccess() {
+        console.log("Verifying success message...");
+        
+        const successMessage = this.page.getByText('פגישתך נקבעה בהצלחה').first();
+        
         try {
-            await Promise.race([
-                successHeader.waitFor({ state: 'visible', timeout: 90000 }),
-                generalErrorLocator.waitFor({ state: 'visible', timeout: 90000 }).then(() => {
-                    throw new Error('System displayed an error message instead of success.');
-                })
-            ]);
-            
-            console.log('✅ Success message detected!');
-            
-            const closeBtn = this.page.locator('button:has-text("סגירה")').first();
-            await closeBtn.click({ force: true });
-            
-            await successHeader.waitFor({ state: 'hidden', timeout: 15000 });
+            await expect(successMessage).toBeVisible({ timeout: 30000 });
+            console.log("🎉 Appointment flow completed successfully.");
+        } catch (err) {
+            console.log("❌ Success message not found. Capturing state...");
+            throw new Error("Confirmation message did not appear. Check server latency.");
+        }
 
-        } catch (e) {
-             throw new Error(`Verification failed. Details: ${e.message}`);
+        const closeBtn = this.page.getByRole('button', { name: 'סגירה' });
+        if (await closeBtn.isVisible({ timeout: 5000 })) {
+            await closeBtn.click();
+            await this.page.waitForTimeout(2000); 
         }
     }
 }

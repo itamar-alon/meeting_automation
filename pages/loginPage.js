@@ -14,16 +14,25 @@ class LoginPage {
     this.userDisplayName = page.locator('.user-name, .profile-name, text=שלום');
   }
 
-  async checkIfLoggedIn() {
-    console.log('🔍 Checking if user is already logged in...');
-    try {
-        await this.topLoginButton.waitFor({ state: 'visible', timeout: 5000 });
-        return false; 
-    } catch (error) {
-        console.log('✅ Login button not found. Assuming session is valid.');
-        return true;
+async checkIfLoggedIn() {
+        console.log('🔍 Checking if user is already logged in...');
+        
+        const loggedInIndicator = this.page.getByRole('button', { name: /תפריט חשבון משתמש מחובר/ }); 
+        
+        try {
+
+            await this.topLoginButton.or(loggedInIndicator).waitFor({ state: 'visible', timeout: 10000 });
+            
+            if (await this.topLoginButton.isVisible()) {
+                return false; 
+            } else {
+                return true;  
+            }
+        } catch (error) {
+            console.log('⚠️ Could not determine login state. Proceeding as not logged in.');
+            return false;
+        }
     }
-  }
 
   async performMainLogin(userId, password) {
     console.log('🔑 Step 1: Checking Main Login Button...');

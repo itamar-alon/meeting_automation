@@ -2,7 +2,7 @@ class MyAppointmentsPage {
     constructor(page) {
         this.page = page;
         
-        this.futureAppointmentsTab = page.getByRole('tab', { name: 'פגישות עתידיות' }) 
+        this.futureAppointmentsTab = page.getByText(/פגישות עתידיות/).first(); 
         this.cancelButton = page.locator('button.MuiButton-outlinedError').filter({ hasText: 'ביטול פגישה' });
         this.confirmCancelButton = page.locator('button').filter({ hasText: 'ביטול פגישה' }).last();
         
