@@ -17,6 +17,30 @@ const logFilePath = path.join(LOG_DIR, logFileName);
 
 let lastTimestamp = 0;
 
+function cleanupOldFiles(directory, daysToKeep = 7) {
+    if (!fs.existsSync(directory)) return;
+
+    const now = Date.now();
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const threshold = daysToKeep * msPerDay;
+
+    const files = fs.readdirSync(directory);
+    files.forEach(file => {
+        const filePath = path.join(directory, file);
+        try {
+            const stats = fs.statSync(filePath);
+            const age = now - stats.mtimeMs;
+
+            if (age > threshold) {
+                fs.unlinkSync(filePath);
+                writeToLogs('SYSTEM', 'INFO', `🗑️ Deleted old file: ${file}`);
+            }
+        } catch (e) {
+            writeToLogs('SYSTEM', 'ERROR', `❌ Failed to delete ${file}: ${e.message}`);
+        }
+    });
+}
+
 function writeToLogs(env, level, msg) {
     const timestamp = new Date().toLocaleTimeString('he-IL', { hour12: false });
     const formattedMsg = `[${timestamp}] [${env}] [${level}] ${msg}`;
@@ -24,7 +48,7 @@ function writeToLogs(env, level, msg) {
     fs.appendFileSync(logFilePath, formattedMsg + '\n', 'utf8');
 }
 
-async function sendCourierErrorEmail(env, errorMessage) {
+async function sendCourierErrorEmail(env, errorMessage, screenshotPath = null) {
     const courierToken = process.env.COURIER_AUTH_TOKEN;
     const targetEmail = process.env.ALERT_EMAIL_ADDRESS;
 
@@ -33,12 +57,19 @@ async function sendCourierErrorEmail(env, errorMessage) {
         return;
     }
 
+    const screenshotHtml = screenshotPath && fs.existsSync(screenshotPath)
+        ? `<img src="data:image/png;base64,${fs.readFileSync(screenshotPath).toString('base64')}" style="max-width:100%; border:1px solid #ccc;">`
+        : '<p style="color: #999;">לא נוצר צילום מסך</p>';
+
     const payload = {
         message: {
             to: { email: targetEmail },
-            content: {
-                title: `🚨 שגיאה באוטומציה - סביבת ${env}`,
-                body: `התגלתה שגיאה קריטית בריצת האוטומציה בסביבת ${env}.\n\nפירוט השגיאה:\n${errorMessage}`
+            template: "R7KTSBP8AF407EN9EJTKXK44P32K",
+            data: {
+                env: env,
+                timestamp: new Date().toLocaleString('he-IL'),
+                errorMessage: errorMessage,
+                screenshotHtml: screenshotHtml
             }
         }
     };
@@ -97,10 +128,10 @@ const info = (env, msg, duration = null) => {
     sendToLoki(env, 'info', finalMsg, duration);
 };
 
-const error = async (env, msg) => {
+const error = async (env, msg, screenshotPath = null) => {
     writeToLogs(env, 'ERROR', msg);
     await sendToLoki(env, 'error', msg);
-    await sendCourierErrorEmail(env, msg);
+    await sendCourierErrorEmail(env, msg, screenshotPath);
 };
 
 async function takeScreenshot(env, page, step) {
@@ -115,7 +146,11 @@ async function takeScreenshot(env, page, step) {
 const ENVIRONMENTS = ['TEST', 'PROD'];
 
 for (const ENV of ENVIRONMENTS) {
-    test(`meeting - ${ENV}`, async ({ browser }) => {
+    test(`meeting - ${ENV}`, async ({ browser, browserName }) => {
+        test.skip(browserName !== 'chromium', 'Running only on Chrome/Chromium');
+
+        const separator = `\n${'='.repeat(60)}\n🌍 ENVIRONMENT: ${ENV}\n${'='.repeat(60)}\n`;
+        fs.appendFileSync(logFilePath, separator, 'utf8');
         test.setTimeout(120000); 
         const INTERCEPT_MODE = ENV === 'PROD'; 
         const AUTH_PATH = path.resolve(__dirname, `auth_state_${ENV}.json`);
@@ -218,18 +253,20 @@ for (const ENV of ENVIRONMENTS) {
 
         } catch (err) {
             const isLastRetry = test.info().retry === test.info().project.retries;
-            if (isLastRetry) {
-                await error(ENV, `💥 CRITICAL FAILURE (Final Attempt): ${err.message}`);
-            } else {
-                info(ENV, `⚠️ Attempt ${test.info().retry + 1} failed, retrying... | Error: ${err.message}`);
-            }
-            if (page && !page.isClosed()) await takeScreenshot(ENV, page, `FAILURE_ATTEMPT_${test.info().retry + 1}`);
-            throw err; 
-        } finally {
-            if (page && !page.isClosed()) await page.close().catch(() => {});
-            if (context) await context.close().catch(() => {});
-            if (browser) await browser.close().catch(() => {});
-            await new Promise(r => setTimeout(r, 2000));
+    
+            let screenshotPath = null;
+            if (page && !page.isClosed()) {
+              const fileName = `FAIL_${ENV}_FAILURE_ATTEMPT_${test.info().retry + 1}_${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+              screenshotPath = path.join(SCREEN_DIR, fileName);
+             await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => { screenshotPath = null; });
+             }
+
+             if (isLastRetry) {
+                 await error(ENV, `💥 CRITICAL FAILURE (Final Attempt): ${err.message}`, screenshotPath);
+             } else {
+             info(ENV, `⚠️ Attempt ${test.info().retry + 1} failed, retrying... | Error: ${err.message}`);
+             }
+             throw err;
         }
     });
 }

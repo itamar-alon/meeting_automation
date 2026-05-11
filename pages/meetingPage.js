@@ -97,90 +97,97 @@ class AppointmentsPage {
         }
     }
 
-    async findAndPickAvailableAppointment() {
-        console.log("Handling dynamic dates and times...");
-        let appointmentFound = false;
-        let monthsChecked = 0;
+async findAndPickAvailableAppointment() {
+    console.log("Handling dynamic dates and times...");
+    let appointmentFound = false;
+    let monthsChecked = 0;
 
-        while (!appointmentFound && monthsChecked < 3) {
-            await this.page.waitForSelector('.MuiSkeleton-root', { state: 'hidden', timeout: 15000 }).catch(() => {});
-            await this.page.waitForTimeout(3000); 
+    while (!appointmentFound && monthsChecked < 3) {
+        await this.page.waitForSelector('.MuiSkeleton-root', { state: 'hidden', timeout: 20000 }).catch(() => {});
         
+        await this.page.waitForLoadState('networkidle');
+
         const daysLocator = this.page.locator('button.MuiPickersDay-root:visible:not(.Mui-disabled):not(.MuiPickersDay-hiddenDaySpacingFiller)');
+        
+        await daysLocator.first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+        
         const datesCount = await daysLocator.count();
-            console.log(`🔍 Found ${datesCount} available dates in current month.`);
+        console.log(`🔍 Found ${datesCount} available dates in current month.`);
 
-            for (let i = 0; i < datesCount; i++) {
-                await this.page.waitForTimeout(1000); 
+        for (let i = 0; i < datesCount; i++) {
+            const dateBtn = daysLocator.nth(i);
+            
+            try {
+                await expect(dateBtn).toBeVisible({ timeout: 10000 });
+                await dateBtn.evaluate(el => el.style.border = '3px solid yellow');
+                console.log(`🗓️ Clicking date #${i + 1} of ${datesCount}...`);
                 
-                const dateBtn = daysLocator.nth(i);
-                
-                try {
-                    await expect(dateBtn).toBeVisible({ timeout: 10000 });
-                    await dateBtn.evaluate(el => el.style.border = '3px solid yellow');
-                    console.log(`🗓️ Clicking date #${i + 1} of ${datesCount}...`);
-                    await dateBtn.click({ force: true });
-                } catch (e) {
-                    console.log(`⚠️ Could not interact with date #${i + 1}. Moving to the next date...`);
-                    continue; 
-                }
+                await Promise.all([
+                    dateBtn.click({ force: true }),
+                    this.page.waitForLoadState('ajax').catch(() => {}) 
+                ]);
 
-                await this.page.waitForTimeout(2500); 
-
-                const timeSlots = this.page.locator('button:visible, div[role="button"]:visible, span.MuiChip-root:visible')
-                    .filter({ hasText: /^\d{1,2}:\d{2}$/ })
-                    .filter({ hasNot: this.page.locator('[disabled], .Mui-disabled') });
-                
-                const slotsCount = await timeSlots.count();
-                if (slotsCount > 0) {
-                    console.log(`✅ Found ${slotsCount} visible time slots! Selecting the first one...`);
-                    await timeSlots.first().click({ force: true });
-                    appointmentFound = true;
-                    break; 
-                } else {
-                    console.log(`ℹ️ Date #${i + 1} has no times available.`);
-                    
-                    const backBtn = this.page.getByText('חזור').first();
-                    if (await backBtn.isVisible({ timeout: 3000 })) {
-                        console.log("🔙 Clicking 'Back' to return to the calendar view...");
-                        await backBtn.click({ force: true });
-                        await this.page.waitForTimeout(2000); 
-                    } else {
-                        const step4Header = this.page.getByText('מועדים פנויים לפגישה').first();
-                        if (await step4Header.isVisible()) {
-                            console.log("🔙 Clicking Step 4 Header to reopen calendar...");
-                            await step4Header.click({ force: true });
-                            await this.page.waitForTimeout(2000);
-                        }
-                    }
-                    console.log("Moving to the next available date...");
-                    continue; 
-                }
+            } catch (e) {
+                console.log(`⚠️ Could not interact with date #${i + 1}. Moving to the next date...`);
+                continue; 
             }
 
-            if (!appointmentFound) {
-                console.log("⏩ Month finished without results. Moving to Next Month...");
-                const nextMonthBtn = this.page.locator('svg[data-testid="ChevronLeftIcon"]:visible').first().locator('..');
-                try {
-                    if (await nextMonthBtn.isVisible({ timeout: 5000 })) {
-                        await nextMonthBtn.click({ force: true });
-                        monthsChecked++;
-                        await this.page.waitForTimeout(2000); 
-                    } else {
-                        console.log("❌ No Next Month button available.");
-                        break; 
-                    }
-                } catch (err) {
-                    console.log("❌ Failed to click Next Month.");
-                    break;
+            const timeSlots = this.page.locator('button:visible, div[role="button"]:visible, span.MuiChip-root:visible')
+                .filter({ hasText: /^\d{1,2}:\d{2}$/ })
+                .filter({ hasNot: this.page.locator('[disabled], .Mui-disabled') });
+
+            const slotsFound = await timeSlots.first().isVisible({ timeout: 5000 }).catch(() => false);
+            
+            const slotsCount = await timeSlots.count();
+            if (slotsCount > 0) {
+                console.log(`✅ Found ${slotsCount} visible time slots! Selecting the first one...`);
+                await timeSlots.first().click({ force: true });
+                appointmentFound = true;
+                break; 
+            } else {
+                console.log(`ℹ️ Date #${i + 1} has no times available.`);
+                
+                const backBtn = this.page.getByText('חזור').first();
+                const step4Header = this.page.getByText('מועדים פנויים לפגישה').first();
+
+                if (await backBtn.isVisible()) {
+                    console.log("🔙 Clicking 'Back' to return to the calendar view...");
+                    await backBtn.click({ force: true });
+                } else if (await step4Header.isVisible()) {
+                    console.log("🔙 Clicking Step 4 Header to reopen calendar...");
+                    await step4Header.click({ force: true });
                 }
+                
+                await daysLocator.first().waitFor({ state: 'visible' }).catch(() => {});
+                continue; 
             }
         }
 
         if (!appointmentFound) {
-            throw new Error("Could not find any available appointments in the next 3 months.");
+            console.log("⏩ Month finished without results. Moving to Next Month...");
+            const nextMonthBtn = this.page.locator('svg[data-testid="ChevronLeftIcon"]:visible').first().locator('..');
+            
+            try {
+                if (await nextMonthBtn.isVisible({ timeout: 5000 })) {
+                    await nextMonthBtn.click({ force: true });
+                    monthsChecked++;
+                    await this.page.waitForSelector('.MuiSkeleton-root', { state: 'visible', timeout: 2000 }).catch(() => {});
+                    await this.page.waitForSelector('.MuiSkeleton-root', { state: 'hidden', timeout: 15000 }).catch(() => {});
+                } else {
+                    console.log("❌ No Next Month button available.");
+                    break; 
+                }
+            } catch (err) {
+                console.log("❌ Failed to click Next Month.");
+                break;
+            }
         }
     }
+
+    if (!appointmentFound) {
+        throw new Error("Could not find any available appointments in the next 3 months.");
+    }
+}
 
 async submitBooking() {
     console.log("Submitting appointment request...");
